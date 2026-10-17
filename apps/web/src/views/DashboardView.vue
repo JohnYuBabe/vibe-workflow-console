@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { fetchHealth } from '@/api/health';
 
 const auth = useAuthStore();
+const router = useRouter();
 
 type HealthState = 'checking' | 'ok' | 'down';
 const health = ref<HealthState>('checking');
@@ -28,36 +30,36 @@ const checklist = [
   },
   {
     title: '角色与权限',
-    detail: 'User → Role → Permission，登录后随用户下发',
+    detail: 'v-permission 指令 + 路由 meta.permission 已生效，viewer 看不到写操作',
     done: true,
   },
   {
-    title: '前后端连通',
-    detail: 'Vite proxy → NestJS → MySQL，健康检查可用',
+    title: '项目与任务',
+    detail: 'Project / Task 列表、详情、验收标准编辑与状态流转时间线',
     done: true,
   },
   {
     title: '规格门禁',
-    detail: '没有规格和验收标准，任务不能进入开发',
-    done: false,
+    detail: '规格至少 20 字且至少 3 条验收标准才能进入待开发，API 422 拦截',
+    done: true,
   },
   {
     title: '验证门禁',
-    detail: '没有通过的验证，任务不能标记完成',
+    detail: '还没有 Verification 模型，review → done 恒被 409 拦下',
     done: false,
   },
   {
     title: '追溯记录',
-    detail: '每个完成项关联 AI 会话或人工记录',
+    detail: '还没有 AI 会话模型，当前只能靠人工记录满足追溯门禁',
     done: false,
   },
 ];
 
 const nextSteps = [
-  'Project / Task 实体与状态流转',
-  '规格门禁：spec + 3 条验收标准才能 ready',
   '验证记录：unit / e2e / manual 三种',
   'AI 会话台账与决策记录',
+  'review → done 的验证与追溯门禁',
+  '任务看板与跨项目筛选',
 ];
 </script>
 
@@ -65,14 +67,19 @@ const nextSteps = [
   <div class="dashboard">
     <header class="page-head">
       <div>
-        <p class="eyebrow">Day 1 · Foundation</p>
+        <p class="eyebrow">Day 2 · Flow &amp; Gates</p>
         <h1>交付控制台</h1>
         <p class="sub">
-          欢迎，{{ auth.user?.name ?? '开发者' }}。这里先把身份和权限跑通，
-          三条门禁在接下来的里程碑里落地。
+          欢迎，{{ auth.user?.name ?? '开发者' }}。项目与任务已经串起来，
+          规格门禁跑通；验证与追溯门禁还缺数据模型，暂时不会把它们标成已完成。
         </p>
       </div>
-      <el-tag class="day-tag" effect="dark" type="primary">Day 1</el-tag>
+      <div class="head-side">
+        <el-button type="primary" @click="router.push('/projects')">
+          查看项目
+        </el-button>
+        <el-tag class="day-tag" effect="dark" type="primary">Day 2</el-tag>
+      </div>
     </header>
 
     <section class="cards">
@@ -175,7 +182,7 @@ const nextSteps = [
       <el-card class="card" shadow="never">
         <template #header>
           <div class="card-head">
-            <span>Day 1 验收</span>
+            <span>当前进度</span>
             <span class="card-kicker">{{ checklist.filter((item) => item.done).length }}/{{ checklist.length }}</span>
           </div>
         </template>
@@ -214,7 +221,8 @@ const nextSteps = [
         </ol>
 
         <p class="next-note">
-          门禁未实现之前，这个页面不会把它标成「已完成」。
+          规格门禁已经跑通；验证门禁和追溯记录在数据模型落地前，
+          会一直显示为未实现。
         </p>
       </el-card>
     </section>
@@ -258,6 +266,13 @@ h1 {
 }
 
 .day-tag {
+  flex: none;
+}
+
+.head-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex: none;
   margin-top: 4px;
 }

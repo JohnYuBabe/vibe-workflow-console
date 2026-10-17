@@ -23,6 +23,13 @@ function logout(): void {
 
       <nav class="app-nav">
         <router-link to="/" class="nav-link">控制台</router-link>
+        <router-link
+          v-if="auth.hasPermission('project:read')"
+          to="/projects"
+          class="nav-link"
+        >
+          项目
+        </router-link>
       </nav>
 
       <div v-if="auth.user" class="account">
@@ -52,7 +59,7 @@ function logout(): void {
     <footer class="app-footer">
       <span>vibe-workflow-console</span>
       <span class="dot">·</span>
-      <span>Day 1 · 登录与权限</span>
+      <span>Day 2 · 项目、任务与规格门禁</span>
     </footer>
   </div>
 </template>

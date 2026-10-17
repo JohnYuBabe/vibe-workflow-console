@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import type { AuthUser, LoginResponse } from '@vibe/shared';
+import type { AuthUser, LoginResponse, PermissionString } from '@vibe/shared';
 import { fetchMeRequest, loginRequest } from '@/api/auth';
 import { TOKEN_KEY } from '@/api/client';
 
@@ -36,6 +36,11 @@ export const useAuthStore = defineStore('auth', () => {
     return me;
   }
 
+  /** 当前用户是否拥有某个权限；未登录或未加载用户时一律视为没有 */
+  function hasPermission(permission: PermissionString): boolean {
+    return user.value?.permissions.includes(permission) ?? false;
+  }
+
   function logout(): void {
     clear();
   }
@@ -46,6 +51,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     login,
     fetchMe,
+    hasPermission,
     logout,
   };
 });

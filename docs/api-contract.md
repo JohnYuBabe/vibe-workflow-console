@@ -1,12 +1,16 @@
-# API contract — Day 1
+# API contract
 
 Base URL: `/api`
+
+> 本文件记录 Day 1 的认证与权限契约。Day 2 新增的项目、任务、验收标准、状态流转接口，以及 `422` / `409` 的门禁错误体，见 [day2.md](day2.md)。
 
 All responses are JSON. Errors use NestJS default shape:
 
 ```json
 { "statusCode": 401, "message": "邮箱或密码错误", "error": "Unauthorized" }
 ```
+
+例外：门禁失败（`422 SPEC_GATE`、`409 SPEC_GATE/VERIFICATION_GATE/TRACEABILITY_GATE/INVALID_TRANSITION`）的 body 是 `{message, code, reasons}`，没有 `statusCode` 与 `error` 字段。
 
 ## POST /api/auth/login
 
@@ -67,7 +71,7 @@ If the database is unreachable, return `503` with `{ "status": "error", "db": "d
 - `task:write`
 - `user:manage`
 
-Day 1 only stores and returns them. The guard and UI enforcement arrive with the Project/Task work.
+Day 2 起由全局守卫强制：除 `@Public()` 标注的登录与健康检查外，所有接口都要求登录；`/projects` 与 `/tasks` 的读写接口还要求对应权限，缺失返回 `403 { "message": "没有权限执行该操作" }`。
 
 ## JWT payload
 

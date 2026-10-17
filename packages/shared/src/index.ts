@@ -1,3 +1,5 @@
+export * from './task-policy';
+
 export type PermissionString = `${string}:${string}`;
 
 export interface AuthUser {
