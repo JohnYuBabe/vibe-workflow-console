@@ -1,0 +1,22 @@
+{
+  "name": "vibe-workflow-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-assisted delivery control console: spec gate, verification gate, traceability.",
+  "packageManager": "pnpm@8.6.12",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "predev": "pnpm --filter @vibe/shared build",
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm --filter @vibe/shared build && pnpm --filter @vibe/server build && pnpm --filter @vibe/web build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "db:up": "docker compose up -d mysql",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @vibe/server prisma:migrate",
+    "db:seed": "pnpm --filter @vibe/server prisma:seed",
+    "db:studio": "pnpm --filter @vibe/server prisma:studio"
+  }
+}
