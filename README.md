@@ -2,8 +2,8 @@
 
 **AI 辅助交付的控制台。** 三条硬规则，防止「AI 写完就算完成」。
 
-> 当前状态：Day 2 — 全局权限守卫、Project/Task、规格门禁。
-> 验证门禁与追溯门禁的规则和拦截已生效，但 Verification / AiSession 模型尚未实现，`review → done` 目前一定被拒绝。
+> 当前状态：Day 3 — 验证记录与 AI 会话落地，`review → done` 可以用真实数据达成。
+> 任务详情可以登记通过的验证与 AI 会话；完成门禁同时检查「至少 1 条通过验证」与「至少 1 条 AI 会话或不少于 20 字人工记录」。
 
 ## 三条规则
 
@@ -13,13 +13,15 @@
 
 这不是一个聊天客户端，也不是 Agent 运行器。它管的是交付过程：规格、AI 会话、验证、决策。
 
-## 当前能力（Day 2）
+## 当前能力（Day 3）
 
 - **项目与任务**：项目列表、项目详情、任务列表、任务详情；规格、验收标准、人工记录可编辑。
 - **权限**：JWT 全局守卫 + `PermissionsGuard`；`@Public()` 放行登录与健康检查，其余接口默认要求登录。写接口用 `@RequirePermission` 声明权限，`viewer` 只读，`editor` / `admin` 可写。
 - **规格门禁**：`draft → ready` 与 `ready → in_progress` 要求规格不少于 20 字、非空验收标准不少于 3 条，不满足返回 422。
-- **完成门禁**：`review → done` 需要至少 1 条通过的验证。Day 2 没有验证记录模型，所以这条流转固定被 409 拦下；人工记录满 20 字只能满足追溯条件，绕不过验证门禁。
-- **前端**：任务详情展示门禁面板（当前字数 / 条数）和流转时间线；流转按钮的可用状态直接来自服务端返回，页面不自己判断。
+- **验证记录**：任务可以登记执行命令、通过 / 未通过结果、证据链接与备注；记录人来自当前登录用户，删除与任务一起级联。
+- **AI 会话**：任务可以关联 AI 会话（标题、工具、摘要），作为完成项的追溯依据。
+- **完成门禁**：`review → done` 需要至少 1 条通过的验证，并且至少 1 条 AI 会话或不少于 20 字的人工记录。两个条件都满足时流转成功，否则返回 409 并列出全部缺口。
+- **前端**：任务详情展示门禁面板（规格、验收、通过验证、追溯四项）和流转时间线，并提供验证记录与 AI 会话的登记、删除入口；流转按钮的可用状态直接来自服务端返回，页面不自己判断。只读账号看不到写入入口。
 
 ## 状态与门禁
 
@@ -34,7 +36,7 @@ draft → ready → in_progress → review → done
 | 流转 | 检查 | 失败响应 |
 | --- | --- | --- |
 | `draft → ready`、`ready → in_progress` | 规格去空白后 ≥20 字，非空验收标准 ≥3 条 | 422 `SPEC_GATE` |
-| `review → done` | 至少 1 条通过的验证记录 | 409 `VERIFICATION_GATE` |
+| `review → done` | 至少 1 条通过的验证记录（`result=passed`） | 409 `VERIFICATION_GATE` |
 | `review → done` | 至少 1 条 AI 会话，或 `manualNote` 去空白后 ≥20 字 | 409 `TRACEABILITY_GATE` |
 | 未列出的流转 | 状态机不允许 | 409 `INVALID_TRANSITION` |
 
@@ -82,11 +84,13 @@ pnpm dev
 
 ### Demo 项目
 
-`pnpm db:seed` 会按名称删除并重建项目 `vibe-workflow-console`，可重复执行。它包含 5 个任务：
+`pnpm db:seed` 会按名称删除并重建项目 `vibe-workflow-console`，可重复执行（连续执行两次结果一致：1 个项目、6 个任务、2 条验证记录、2 条 AI 会话）。它包含 6 个任务：
 
-- 「登录与 JWT」（待审查）与「规格门禁」（进行中）规格齐全，并带有流转历史；
+- 「登录与 JWT」（待审查）规格齐全，带 1 条未通过验证与 1 条 AI 会话：追溯已满足，验证不通过仍会被 409 拦下；
+- 「规格门禁」（进行中）规格与验收标准齐全，并带有流转历史；
 - 「验证记录台账」只有 2 条验收标准，「AI 会话台账」规格为空，用来复现 422；
-- 「决策记录」在待开发，规格与验收标准齐全。
+- 「决策记录」在待开发，规格与验收标准齐全；
+- 「完成门禁演示」（待审查）带 1 条通过验证与 1 条 AI 会话，用来演示 `review → done` 可以达成。
 
 ## API
 
@@ -108,8 +112,14 @@ Base URL：`/api`。除登录与健康检查外都需要 `Authorization: Bearer 
 | PATCH | `/tasks/:id` | `task:write` | 修改标题、规格、人工记录 |
 | PUT | `/tasks/:id/criteria` | `task:write` | 按顺序重写验收标准 |
 | POST | `/tasks/:id/transitions` | `task:write` | 状态流转，门禁失败返回 422 / 409 |
+| POST | `/tasks/:id/verifications` | `task:write` | 新增验证记录（命令、结果、证据链接、备注） |
+| GET | `/tasks/:id/verifications` | `task:read` | 验证记录列表，按时间倒序 |
+| DELETE | `/tasks/:id/verifications/:verificationId` | `task:write` | 删除验证记录；不属于该任务返回 404 |
+| POST | `/tasks/:id/ai-sessions` | `task:write` | 新增 AI 会话（标题、工具、摘要） |
+| GET | `/tasks/:id/ai-sessions` | `task:read` | AI 会话列表，按时间倒序 |
+| DELETE | `/tasks/:id/ai-sessions/:sessionId` | `task:write` | 删除 AI 会话；不属于该任务返回 404 |
 
-任务详情的 `availableTransitions` 给出每个候选状态是否可用及原因，`gate` 给出规格字数与验收条数；字段明细与错误响应见 [docs/day2.md](docs/day2.md)。
+任务详情的 `availableTransitions` 给出每个候选状态是否可用及原因，`gate` 给出规格字数、验收条数、通过验证数与追溯状态；字段明细与错误响应见 [docs/day2.md](docs/day2.md)，Day 3 的验证记录与 AI 会话见 [docs/day3.md](docs/day3.md)。
 
 ## 一键容器启动
 
@@ -139,6 +149,7 @@ docs/
   api-contract.md
   day1.md
   day2.md
+  day3.md
 deploy/
   nginx.conf     域名路径部署模板
 ```
@@ -148,14 +159,18 @@ deploy/
 ```bash
 pnpm test
 pnpm --filter @vibe/server test
+pnpm --filter @vibe/server test:e2e
 pnpm --filter @vibe/web lint
 ```
+
+`test:e2e` 需要可用的 MySQL；CI 里由独立的 e2e job 起 `mysql:8` 服务，先 `prisma migrate deploy` 与 seed，再串行执行。
 
 ## 文档
 
 - [API 契约](docs/api-contract.md)
 - [Day 1 交付说明](docs/day1.md)
 - [Day 2 交付说明](docs/day2.md)
+- [Day 3 交付说明](docs/day3.md)
 
 ## License
 

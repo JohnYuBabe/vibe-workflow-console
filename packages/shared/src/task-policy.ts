@@ -48,9 +48,9 @@ export interface TaskGateInput {
   spec: string | null;
   /** 验收标准内容列表，空白项不计入 */
   acceptanceCriteria: string[];
-  /** 通过的验证条数（Day 2 尚无 Verification 模型，恒为 0） */
+  /** 通过的验证条数（Day 3 起由 Verification 中 result='passed' 的记录统计） */
   passedVerifications: number;
-  /** AI 会话条数（Day 2 尚无 AiSession 模型，恒为 0） */
+  /** AI 会话条数（Day 3 起由任务关联的 AiSession 统计） */
   aiSessionCount: number;
   /** 人工追溯记录，可为空 */
   manualNote: string | null;
@@ -125,9 +125,45 @@ function evaluateSpecGate(input: TaskGateInput): string[] {
   return reasons;
 }
 
+/** 完成门禁摘要，供详情接口展示验证/追溯状态 */
+export interface CompletionGateSummary {
+  /** 通过的验证条数 */
+  passedVerifications: number;
+  /** 是否至少有 1 条通过的验证 */
+  verificationOk: boolean;
+  /** AI 会话条数 */
+  aiSessionCount: number;
+  /** 人工记录去空白后的字数 */
+  manualNoteLength: number;
+  /** 是否满足追溯要求：至少 1 条 AI 会话，或人工记录不少于 20 字 */
+  traceabilityOk: boolean;
+}
+
+/**
+ * 计算完成门禁（验证 + 追溯）的当前状态。
+ * evaluateVerificationGate 与 evaluateTraceabilityGate 都从这里派生，
+ * 详情接口的 gate 摘要也取同一份结果，保证门禁逻辑只有一份。
+ */
+export function summarizeCompletionGate(
+  input: TaskGateInput,
+): CompletionGateSummary {
+  const passedVerifications = input.passedVerifications;
+  const aiSessionCount = input.aiSessionCount;
+  const manualNoteLength = (input.manualNote ?? '').trim().length;
+
+  return {
+    passedVerifications,
+    verificationOk: passedVerifications >= 1,
+    aiSessionCount,
+    manualNoteLength,
+    traceabilityOk:
+      aiSessionCount >= 1 || manualNoteLength >= MANUAL_NOTE_MIN_LENGTH,
+  };
+}
+
 /** 验证门禁：review->done 至少 1 条通过的验证 */
 function evaluateVerificationGate(input: TaskGateInput): string[] {
-  if (input.passedVerifications >= 1) {
+  if (summarizeCompletionGate(input).verificationOk) {
     return [];
   }
   return ['没有通过的验证记录，不能标记完成'];
@@ -135,12 +171,7 @@ function evaluateVerificationGate(input: TaskGateInput): string[] {
 
 /** 追溯门禁：review->done 至少 1 条 AI 会话，或不少于 20 字的人工记录 */
 function evaluateTraceabilityGate(input: TaskGateInput): string[] {
-  if (input.aiSessionCount >= 1) {
-    return [];
-  }
-
-  const noteLength = (input.manualNote ?? '').trim().length;
-  if (noteLength >= MANUAL_NOTE_MIN_LENGTH) {
+  if (summarizeCompletionGate(input).traceabilityOk) {
     return [];
   }
 

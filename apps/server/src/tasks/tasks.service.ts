@@ -7,7 +7,11 @@ import type { ListTasksQueryDto } from './dto/list-tasks-query.dto';
 import type { UpdateCriteriaDto } from './dto/update-criteria.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import { buildGateInput, summarizeGate } from './task-gate.util';
-import type { TaskDetail, TaskSummary } from './task.types';
+import type {
+  TaskDetail,
+  TaskSummary,
+  VerificationResultValue,
+} from './task.types';
 
 /** 去掉首尾空白并丢弃空串 */
 function cleanCriteria(items: string[]): string[] {
@@ -81,6 +85,14 @@ export class TasksService {
           include: { actor: { select: { id: true, name: true } } },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         },
+        verifications: {
+          include: { createdBy: { select: { id: true, name: true } } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        },
+        aiSessions: {
+          include: { createdBy: { select: { id: true, name: true } } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        },
       },
     });
 
@@ -110,6 +122,25 @@ export class TasksService {
         actor: transition.actor,
         note: transition.note,
         createdAt: transition.createdAt,
+      })),
+      verifications: task.verifications.map((verification) => ({
+        id: verification.id,
+        taskId: verification.taskId,
+        command: verification.command,
+        result: verification.result as VerificationResultValue,
+        evidenceUrl: verification.evidenceUrl,
+        note: verification.note,
+        createdBy: verification.createdBy,
+        createdAt: verification.createdAt,
+      })),
+      aiSessions: task.aiSessions.map((session) => ({
+        id: session.id,
+        taskId: session.taskId,
+        title: session.title,
+        tool: session.tool,
+        summary: session.summary,
+        createdBy: session.createdBy,
+        createdAt: session.createdAt,
       })),
       availableTransitions: availableTransitions(input, status),
       gate: summarizeGate(input),

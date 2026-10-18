@@ -49,6 +49,57 @@ jobs:
       - name: Validate compose file
         run: docker compose config > /dev/null
 
+  e2e:
+    name: e2e gates
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: vibe_console
+          MYSQL_USER: vibe
+          MYSQL_PASSWORD: vibe
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: mysql://vibe:vibe@127.0.0.1:3306/vibe_console
+      JWT_SECRET: ci-e2e-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.6.12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @vibe/shared build
+
+      - name: Generate Prisma client
+        run: pnpm --filter @vibe/server exec prisma generate
+
+      - name: Migrate database
+        run: pnpm --filter @vibe/server exec prisma migrate deploy
+
+      - name: Seed database
+        run: pnpm --filter @vibe/server exec tsx prisma/seed.ts
+
+      - name: Run E2E tests
+        run: pnpm --filter @vibe/server test:e2e
+
   docker:
     name: docker images
     runs-on: ubuntu-latest

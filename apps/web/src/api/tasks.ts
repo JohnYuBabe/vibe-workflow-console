@@ -28,12 +28,52 @@ export interface TaskTransitionRecord {
   createdAt: string;
 }
 
+/** 验证结果，与后端 Prisma 枚举一致 */
+export type VerificationResult = 'passed' | 'failed';
+
+/** 记录人的精简信息；用户被删除后可能为空 */
+export interface RecordAuthorRef {
+  id: string;
+  name: string;
+}
+
+/** 一条验证记录 */
+export interface VerificationView {
+  id: string;
+  taskId: string;
+  command: string;
+  result: VerificationResult;
+  evidenceUrl: string | null;
+  note: string | null;
+  createdBy: RecordAuthorRef | null;
+  createdAt: string;
+}
+
+/** 一条 AI 会话记录 */
+export interface AiSessionView {
+  id: string;
+  taskId: string;
+  title: string;
+  tool: string | null;
+  summary: string | null;
+  createdBy: RecordAuthorRef | null;
+  createdAt: string;
+}
+
 /** 服务端计算好的门禁快照，前端只负责展示 */
 export interface TaskGate {
   specLength: number;
   criteriaCount: number;
   specOk: boolean;
   criteriaOk: boolean;
+  /** 通过的验证条数（result='passed'） */
+  passedVerifications: number;
+  verificationOk: boolean;
+  /** 关联的 AI 会话条数 */
+  aiSessionCount: number;
+  /** 人工记录去空白后的字数 */
+  manualNoteLength: number;
+  traceabilityOk: boolean;
 }
 
 /** 任务列表项 */
@@ -64,6 +104,10 @@ export interface TaskDetail {
   status: TaskStatus;
   criteria: AcceptanceCriterion[];
   transitions: TaskTransitionRecord[];
+  /** 验证记录，按 createdAt desc、id desc 排列 */
+  verifications: VerificationView[];
+  /** AI 会话记录，按 createdAt desc、id desc 排列 */
+  aiSessions: AiSessionView[];
   /** 服务端按共享策略算好的候选流转，前端不自行判断门禁 */
   availableTransitions: AvailableTransition[];
   gate: TaskGate;
@@ -92,6 +136,25 @@ export interface UpdateTaskInput {
 export interface TransitionInput {
   to: TaskStatus;
   note?: string;
+}
+
+export interface CreateVerificationInput {
+  /** 执行命令，去空白后 1..500 */
+  command: string;
+  result: VerificationResult;
+  /** 证据链接，空串由服务端存 null */
+  evidenceUrl?: string;
+  /** 备注，最长 5000 */
+  note?: string;
+}
+
+export interface CreateAiSessionInput {
+  /** 会话标题，去空白后 1..200 */
+  title: string;
+  /** 使用的工具，最长 100 */
+  tool?: string;
+  /** 会话摘要，最长 5000 */
+  summary?: string;
 }
 
 export async function fetchTasks(query: TaskQuery = {}): Promise<TaskSummary[]> {
@@ -151,6 +214,62 @@ export async function transitionTask(
     payload,
   );
   return data;
+}
+
+/** 以下记录接口都挂在任务下；写操作需要 task:write，读操作需要 task:read */
+
+export async function fetchVerifications(
+  taskId: string,
+): Promise<VerificationView[]> {
+  const { data } = await api.get<VerificationView[]>(
+    `/tasks/${taskId}/verifications`,
+  );
+  return data;
+}
+
+export async function createVerification(
+  taskId: string,
+  payload: CreateVerificationInput,
+): Promise<VerificationView> {
+  const { data } = await api.post<VerificationView>(
+    `/tasks/${taskId}/verifications`,
+    payload,
+  );
+  return data;
+}
+
+export async function deleteVerification(
+  taskId: string,
+  verificationId: string,
+): Promise<void> {
+  await api.delete(`/tasks/${taskId}/verifications/${verificationId}`);
+}
+
+export async function fetchAiSessions(
+  taskId: string,
+): Promise<AiSessionView[]> {
+  const { data } = await api.get<AiSessionView[]>(
+    `/tasks/${taskId}/ai-sessions`,
+  );
+  return data;
+}
+
+export async function createAiSession(
+  taskId: string,
+  payload: CreateAiSessionInput,
+): Promise<AiSessionView> {
+  const { data } = await api.post<AiSessionView>(
+    `/tasks/${taskId}/ai-sessions`,
+    payload,
+  );
+  return data;
+}
+
+export async function deleteAiSession(
+  taskId: string,
+  sessionId: string,
+): Promise<void> {
+  await api.delete(`/tasks/${taskId}/ai-sessions/${sessionId}`);
 }
 
 /** 只关心计数字段的宽松入参，表格行等局部类型也能直接传进来 */

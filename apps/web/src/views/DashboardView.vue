@@ -45,21 +45,21 @@ const checklist = [
   },
   {
     title: '验证门禁',
-    detail: '还没有 Verification 模型，review → done 恒被 409 拦下',
-    done: false,
+    detail: 'Verification 记录带通过/未通过与证据链接，review → done 需至少 1 条通过',
+    done: true,
   },
   {
     title: '追溯记录',
-    detail: '还没有 AI 会话模型，当前只能靠人工记录满足追溯门禁',
-    done: false,
+    detail: 'AiSession 台账与人工记录二选一，满足追溯才允许标记完成',
+    done: true,
   },
 ];
 
 const nextSteps = [
-  '验证记录：unit / e2e / manual 三种',
-  'AI 会话台账与决策记录',
-  'review → done 的验证与追溯门禁',
   '任务看板与跨项目筛选',
+  'CI 流水线在 GitHub 上首次跑通',
+  '演示环境部署并确认链接返回 200',
+  '简历项目条目与 5 分钟演示脚本',
 ];
 </script>
 
@@ -67,18 +67,18 @@ const nextSteps = [
   <div class="dashboard">
     <header class="page-head">
       <div>
-        <p class="eyebrow">Day 2 · Flow &amp; Gates</p>
+        <p class="eyebrow">Day 3 · Trace &amp; Gates</p>
         <h1>交付控制台</h1>
         <p class="sub">
-          欢迎，{{ auth.user?.name ?? '开发者' }}。项目与任务已经串起来，
-          规格门禁跑通；验证与追溯门禁还缺数据模型，暂时不会把它们标成已完成。
+          欢迎，{{ auth.user?.name ?? '开发者' }}。项目、任务与两道门禁已经串起来：
+          review → done 需要至少一条通过的验证记录，以及 AI 会话或人工记录。
         </p>
       </div>
       <div class="head-side">
         <el-button type="primary" @click="router.push('/projects')">
           查看项目
         </el-button>
-        <el-tag class="day-tag" effect="dark" type="primary">Day 2</el-tag>
+        <el-tag class="day-tag" effect="dark" type="primary">Day 3</el-tag>
       </div>
     </header>
 
@@ -209,7 +209,7 @@ const nextSteps = [
         <template #header>
           <div class="card-head">
             <span>接下来</span>
-            <span class="card-kicker">Day 2–3</span>
+            <span class="card-kicker">Day 3–4</span>
           </div>
         </template>
 
@@ -221,8 +221,8 @@ const nextSteps = [
         </ol>
 
         <p class="next-note">
-          规格门禁已经跑通；验证门禁和追溯记录在数据模型落地前，
-          会一直显示为未实现。
+          验证记录与 AI 会话已经接进任务详情；下一步是看板、CI 实跑与部署，
+          链接确认返回 200 之后再写进简历。
         </p>
       </el-card>
     </section>

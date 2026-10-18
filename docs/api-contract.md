@@ -2,7 +2,7 @@
 
 Base URL: `/api`
 
-> 本文件记录 Day 1 的认证与权限契约。Day 2 新增的项目、任务、验收标准、状态流转接口，以及 `422` / `409` 的门禁错误体，见 [day2.md](day2.md)。
+> 本文件记录 Day 1 的认证与权限契约。Day 2 新增的项目、任务、验收标准、状态流转接口，以及 `422` / `409` 的门禁错误体，见 [day2.md](day2.md)。Day 3 新增的验证记录与 AI 会话接口见 [day3.md](day3.md)。
 
 All responses are JSON. Errors use NestJS default shape:
 

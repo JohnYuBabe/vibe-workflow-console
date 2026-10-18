@@ -34,31 +34,48 @@ export class TaskStatusService {
     dto: TransitionTaskDto,
     actor: AuthUser,
   ): Promise<TaskDetail> {
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      include: { criteria: true },
-    });
-
-    if (!task) {
-      throw new NotFoundException('任务不存在');
-    }
-
-    const input = buildGateInput(task);
-    const evaluation = evaluateTransition(
-      input,
-      task.status as TaskStatus,
-      dto.to,
-    );
-
-    if (!evaluation.allowed) {
-      this.throwTransitionError(evaluation);
-    }
-
+    // 门禁读取、判定与写入放在同一事务里，状态更新再用 where status = from 做条件写。
+    // 否则并发请求会各自基于旧状态通过门禁，写出互相矛盾的历史
+    //（例如同时出现 review -> in_progress 与 review -> done）。
     await this.prisma.$transaction(async (tx) => {
-      await tx.task.update({
+      const task = await tx.task.findUnique({
         where: { id: taskId },
+        include: {
+          criteria: true,
+          // 门禁只关心是否通过与会话条数，不加载正文
+          verifications: { select: { result: true } },
+          aiSessions: { select: { id: true } },
+        },
+      });
+
+      if (!task) {
+        throw new NotFoundException('任务不存在');
+      }
+
+      const input = buildGateInput(task);
+      const evaluation = evaluateTransition(
+        input,
+        task.status as TaskStatus,
+        dto.to,
+      );
+
+      if (!evaluation.allowed) {
+        this.throwTransitionError(evaluation);
+      }
+
+      const updated = await tx.task.updateMany({
+        where: { id: taskId, status: task.status },
         data: { status: dto.to },
       });
+
+      // 条件写没命中，说明状态已被其他请求改掉，本次流转作废
+      if (updated.count === 0) {
+        throw new ConflictException({
+          message: '任务状态已被其他操作修改，请刷新后重试',
+          code: 'INVALID_TRANSITION',
+          reasons: ['任务状态已被其他操作修改，请刷新后重试'],
+        });
+      }
 
       await tx.taskTransition.create({
         data: {

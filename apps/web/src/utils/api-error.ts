@@ -9,6 +9,13 @@ export function readApiError(
   fallback = '操作失败，请稍后重试。',
 ): string {
   if (axios.isAxiosError(value)) {
+    const status = value.response?.status;
+
+    // 5xx 的服务端文案通常是英文兜底或内部错误，不直接展示给用户
+    if (typeof status === 'number' && status >= 500) {
+      return '服务端异常，请稍后重试。';
+    }
+
     const body = value.response?.data as
       | { message?: string | string[]; reasons?: string[] }
       | undefined;

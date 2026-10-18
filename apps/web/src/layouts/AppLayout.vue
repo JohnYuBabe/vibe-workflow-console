@@ -59,7 +59,7 @@ function logout(): void {
     <footer class="app-footer">
       <span>vibe-workflow-console</span>
       <span class="dot">·</span>
-      <span>Day 2 · 项目、任务与规格门禁</span>
+      <span>Day 3 · 验证记录与追溯门禁</span>
     </footer>
   </div>
 </template>

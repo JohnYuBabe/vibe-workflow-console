@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ACCEPTANCE_MIN_COUNT,
   MANUAL_NOTE_MIN_LENGTH,
@@ -11,11 +11,20 @@ import {
   type TaskStatus,
 } from '@vibe/shared';
 import {
+  createAiSession,
+  createVerification,
+  deleteAiSession,
+  deleteVerification,
   fetchTask,
   replaceCriteria,
   transitionTask,
   updateTask,
+  type AiSessionView,
   type TaskDetail,
+  type TaskGate,
+  type TaskTransitionRecord,
+  type VerificationResult,
+  type VerificationView,
 } from '@/api/tasks';
 import { useAuthStore } from '@/stores/auth';
 import { readApiError } from '@/utils/api-error';
@@ -70,6 +79,69 @@ const criteriaGatePercent = computed(() =>
     ? percentOf(task.value.gate.criteriaCount, ACCEPTANCE_MIN_COUNT)
     : 0,
 );
+const verificationGatePercent = computed(() =>
+  task.value ? percentOf(task.value.gate.passedVerifications, 1) : 0,
+);
+
+/** 详情未加载时的零值占位，页面此时不会渲染门禁面板 */
+const EMPTY_GATE: TaskGate = {
+  specLength: 0,
+  criteriaCount: 0,
+  specOk: false,
+  criteriaOk: false,
+  passedVerifications: 0,
+  verificationOk: false,
+  aiSessionCount: 0,
+  manualNoteLength: 0,
+  traceabilityOk: false,
+};
+
+/** 门禁摘要与会话/验证数据全部取服务端返回值，前端不在这里重算 */
+const gate = computed<TaskGate>(() => ({
+  ...EMPTY_GATE,
+  ...(task.value?.gate ?? {}),
+}));
+const transitionRecords = computed<TaskTransitionRecord[]>(
+  () => task.value?.transitions ?? [],
+);
+const verifications = computed<VerificationView[]>(
+  () => task.value?.verifications ?? [],
+);
+const aiSessions = computed<AiSessionView[]>(
+  () => task.value?.aiSessions ?? [],
+);
+
+const verificationFormOpen = ref(false);
+const savingVerification = ref(false);
+const deletingVerificationId = ref<string | null>(null);
+const verificationForm = reactive({
+  command: '',
+  result: 'passed' as VerificationResult,
+  evidenceUrl: '',
+  note: '',
+});
+
+const aiSessionFormOpen = ref(false);
+const savingAiSession = ref(false);
+const deletingAiSessionId = ref<string | null>(null);
+const aiSessionForm = reactive({
+  title: '',
+  tool: '',
+  summary: '',
+});
+
+function verificationTagType(result: VerificationResult): 'success' | 'danger' {
+  return result === 'passed' ? 'success' : 'danger';
+}
+
+function verificationResultLabel(result: VerificationResult): string {
+  return result === 'passed' ? '通过' : '未通过';
+}
+
+/** 只把 http(s) 链接渲染成可点击链接，历史脏数据里的 javascript: 之类不会被执行 */
+function isHttpUrl(value: string | null | undefined): boolean {
+  return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
 
 function syncDraft(value: TaskDetail): void {
   specDraft.value = value.spec ?? '';
@@ -169,6 +241,141 @@ async function applyTransition(item: AvailableTransition): Promise<void> {
   }
 }
 
+function openVerificationForm(): void {
+  verificationForm.command = '';
+  verificationForm.result = 'passed';
+  verificationForm.evidenceUrl = '';
+  verificationForm.note = '';
+  verificationFormOpen.value = true;
+}
+
+async function submitVerification(): Promise<void> {
+  if (!canWrite.value || savingVerification.value) {
+    return;
+  }
+
+  const command = verificationForm.command.trim();
+  if (!command) {
+    ElMessage.warning('请填写执行命令');
+    return;
+  }
+
+  savingVerification.value = true;
+  try {
+    await createVerification(taskId.value, {
+      command,
+      result: verificationForm.result,
+      evidenceUrl: verificationForm.evidenceUrl.trim() || undefined,
+      note: verificationForm.note.trim() || undefined,
+    });
+    ElMessage.success('验证记录已添加');
+    verificationFormOpen.value = false;
+    // 记录变化会影响门禁与流转按钮，统一以服务端最新详情为准
+    await load({ silent: true, resetDrafts: false });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '添加验证记录失败，请稍后重试。'));
+  } finally {
+    savingVerification.value = false;
+  }
+}
+
+async function removeVerification(record: VerificationView): Promise<void> {
+  if (!canWrite.value) {
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除命令「${record.command}」的验证记录？`,
+      '删除验证记录',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  deletingVerificationId.value = record.id;
+  try {
+    await deleteVerification(taskId.value, record.id);
+    ElMessage.success('验证记录已删除');
+    await load({ silent: true, resetDrafts: false });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '删除验证记录失败，请稍后重试。'));
+  } finally {
+    deletingVerificationId.value = null;
+  }
+}
+
+function openAiSessionForm(): void {
+  aiSessionForm.title = '';
+  aiSessionForm.tool = '';
+  aiSessionForm.summary = '';
+  aiSessionFormOpen.value = true;
+}
+
+async function submitAiSession(): Promise<void> {
+  if (!canWrite.value || savingAiSession.value) {
+    return;
+  }
+
+  const title = aiSessionForm.title.trim();
+  if (!title) {
+    ElMessage.warning('请填写会话标题');
+    return;
+  }
+
+  savingAiSession.value = true;
+  try {
+    await createAiSession(taskId.value, {
+      title,
+      tool: aiSessionForm.tool.trim() || undefined,
+      summary: aiSessionForm.summary.trim() || undefined,
+    });
+    ElMessage.success('AI 会话已添加');
+    aiSessionFormOpen.value = false;
+    await load({ silent: true, resetDrafts: false });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '添加 AI 会话失败，请稍后重试。'));
+  } finally {
+    savingAiSession.value = false;
+  }
+}
+
+async function removeAiSession(session: AiSessionView): Promise<void> {
+  if (!canWrite.value) {
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 AI 会话「${session.title}」？`,
+      '删除 AI 会话',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  deletingAiSessionId.value = session.id;
+  try {
+    await deleteAiSession(taskId.value, session.id);
+    ElMessage.success('AI 会话已删除');
+    await load({ silent: true, resetDrafts: false });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '删除 AI 会话失败，请稍后重试。'));
+  } finally {
+    deletingAiSessionId.value = null;
+  }
+}
+
 function transitionLabel(item: AvailableTransition): string {
   return `流转到「${TASK_STATUS_LABELS[item.to]}」`;
 }
@@ -254,7 +461,8 @@ onMounted(load);
                 placeholder="记录人工判断、命令行验证或决策过程。标记完成时，AI 会话或不少于 20 字的人工记录必须有一个。"
               />
               <p class="hint">
-                Day 2 还没有 AI 会话模型，追溯门禁只能靠这段人工记录满足。
+                标记完成时，至少需要 1 条通过的验证；追溯上至少 1 条 AI 会话或不少于
+                {{ MANUAL_NOTE_MIN_LENGTH }} 字的人工记录，满足其一即可。
               </p>
             </div>
           </el-card>
@@ -309,13 +517,248 @@ onMounted(load);
               保存修改
             </el-button>
           </div>
+
+          <el-card class="card" shadow="never">
+            <template #header>
+              <div class="card-head">
+                <span>验证记录</span>
+                <span class="card-kicker">{{ verifications.length }} 条</span>
+              </div>
+            </template>
+
+            <p v-if="!verifications.length" class="muted">
+              还没有验证记录。标记完成前至少要有一条通过的验证。
+            </p>
+
+            <div v-else class="record-list">
+              <article
+                v-for="record in verifications"
+                :key="record.id"
+                class="record-item"
+              >
+                <div class="record-head">
+                  <el-tag
+                    size="small"
+                    effect="plain"
+                    :type="verificationTagType(record.result)"
+                  >
+                    {{ verificationResultLabel(record.result) }}
+                  </el-tag>
+                  <code class="record-command">{{ record.command }}</code>
+                  <el-button
+                    v-permission="'task:write'"
+                    class="record-delete"
+                    text
+                    type="danger"
+                    size="small"
+                    :loading="deletingVerificationId === record.id"
+                    @click="removeVerification(record)"
+                  >
+                    删除
+                  </el-button>
+                </div>
+                <p v-if="record.note" class="record-note">{{ record.note }}</p>
+                <div class="record-meta">
+                  <a
+                    v-if="isHttpUrl(record.evidenceUrl)"
+                    :href="record.evidenceUrl ?? undefined"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="evidence-link"
+                  >
+                    查看证据
+                  </a>
+                  <span
+                    v-else-if="record.evidenceUrl"
+                    class="evidence-link evidence-link--plain"
+                    :title="record.evidenceUrl"
+                  >
+                    证据链接不可用
+                  </span>
+                  <span>{{ record.createdBy?.name ?? '—' }}</span>
+                  <time>{{ formatDateTime(record.createdAt) }}</time>
+                </div>
+              </article>
+            </div>
+
+            <div class="record-actions">
+              <el-button
+                v-permission="'task:write'"
+                text
+                type="primary"
+                @click="openVerificationForm"
+              >
+                + 添加验证记录
+              </el-button>
+            </div>
+
+            <el-form
+              v-if="verificationFormOpen"
+              class="record-form"
+              label-position="top"
+              @submit.prevent="submitVerification"
+            >
+              <div class="form-grid">
+                <el-form-item label="命令" required>
+                  <el-input
+                    v-model="verificationForm.command"
+                    maxlength="500"
+                    show-word-limit
+                    placeholder="例如：pnpm --filter @vibe/server test"
+                  />
+                </el-form-item>
+                <el-form-item label="结果" required>
+                  <el-select
+                    v-model="verificationForm.result"
+                    style="width: 100%"
+                  >
+                    <el-option label="通过" value="passed" />
+                    <el-option label="未通过" value="failed" />
+                  </el-select>
+                </el-form-item>
+              </div>
+
+              <el-form-item label="证据链接（可选）">
+                <el-input
+                  v-model="verificationForm.evidenceUrl"
+                  maxlength="1000"
+                  placeholder="https://..."
+                />
+              </el-form-item>
+
+              <el-form-item label="备注（可选）">
+                <el-input
+                  v-model="verificationForm.note"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="5000"
+                  show-word-limit
+                  placeholder="失败原因、复现步骤或补充说明"
+                />
+              </el-form-item>
+
+              <div class="form-actions">
+                <el-button @click="verificationFormOpen = false">
+                  取消
+                </el-button>
+                <el-button
+                  type="primary"
+                  :loading="savingVerification"
+                  @click="submitVerification"
+                >
+                  保存记录
+                </el-button>
+              </div>
+            </el-form>
+          </el-card>
+
+          <el-card class="card" shadow="never">
+            <template #header>
+              <div class="card-head">
+                <span>AI 会话</span>
+                <span class="card-kicker">{{ aiSessions.length }} 条</span>
+              </div>
+            </template>
+
+            <p v-if="!aiSessions.length" class="muted">
+              还没有 AI 会话。至少一条会话可以满足完成时的追溯要求。
+            </p>
+
+            <div v-else class="record-list">
+              <article
+                v-for="session in aiSessions"
+                :key="session.id"
+                class="record-item"
+              >
+                <div class="record-head">
+                  <strong class="record-title">{{ session.title }}</strong>
+                  <el-button
+                    v-permission="'task:write'"
+                    class="record-delete"
+                    text
+                    type="danger"
+                    size="small"
+                    :loading="deletingAiSessionId === session.id"
+                    @click="removeAiSession(session)"
+                  >
+                    删除
+                  </el-button>
+                </div>
+                <p v-if="session.summary" class="record-note">
+                  {{ session.summary }}
+                </p>
+                <div class="record-meta">
+                  <span>工具：{{ session.tool || '—' }}</span>
+                  <span>{{ session.createdBy?.name ?? '—' }}</span>
+                  <time>{{ formatDateTime(session.createdAt) }}</time>
+                </div>
+              </article>
+            </div>
+
+            <div class="record-actions">
+              <el-button
+                v-permission="'task:write'"
+                text
+                type="primary"
+                @click="openAiSessionForm"
+              >
+                + 添加 AI 会话
+              </el-button>
+            </div>
+
+            <el-form
+              v-if="aiSessionFormOpen"
+              class="record-form"
+              label-position="top"
+              @submit.prevent="submitAiSession"
+            >
+              <el-form-item label="标题" required>
+                <el-input
+                  v-model="aiSessionForm.title"
+                  maxlength="200"
+                  show-word-limit
+                  placeholder="例如：Claude Code 实现完成门禁"
+                />
+              </el-form-item>
+
+              <el-form-item label="工具（可选）">
+                <el-input
+                  v-model="aiSessionForm.tool"
+                  maxlength="100"
+                  placeholder="例如：Claude Code"
+                />
+              </el-form-item>
+
+              <el-form-item label="摘要（可选）">
+                <el-input
+                  v-model="aiSessionForm.summary"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="5000"
+                  show-word-limit
+                  placeholder="会话做了什么、结论是什么"
+                />
+              </el-form-item>
+
+              <div class="form-actions">
+                <el-button @click="aiSessionFormOpen = false">取消</el-button>
+                <el-button
+                  type="primary"
+                  :loading="savingAiSession"
+                  @click="submitAiSession"
+                >
+                  保存会话
+                </el-button>
+              </div>
+            </el-form>
+          </el-card>
         </section>
 
         <aside class="right">
           <el-card class="card gate-card" shadow="never">
             <template #header>
               <div class="card-head">
-                <span>规格门禁</span>
+                <span>任务门禁</span>
                 <span class="card-kicker">服务端判定</span>
               </div>
             </template>
@@ -324,36 +767,77 @@ onMounted(load);
               <div class="gate-item">
                 <div class="gate-row">
                   <span>规格字数</span>
-                  <strong :class="task.gate.specOk ? 'ok' : 'bad'">
-                    {{ task.gate.specLength }} / {{ SPEC_MIN_LENGTH }}
+                  <strong :class="gate.specOk ? 'ok' : 'bad'">
+                    {{ gate.specLength }} / {{ SPEC_MIN_LENGTH }}
                   </strong>
                 </div>
                 <el-progress
                   :percentage="specGatePercent"
-                  :status="task.gate.specOk ? 'success' : 'warning'"
+                  :status="gate.specOk ? 'success' : 'warning'"
                   :show-text="false"
                   :stroke-width="6"
                 />
-                <p class="gate-result" :class="task.gate.specOk ? 'ok' : 'bad'">
-                  {{ task.gate.specOk ? '已达标' : '未达标' }}
+                <p class="gate-result" :class="gate.specOk ? 'ok' : 'bad'">
+                  {{ gate.specOk ? '已达标' : '未达标' }}
                 </p>
               </div>
 
               <div class="gate-item">
                 <div class="gate-row">
                   <span>验收条数</span>
-                  <strong :class="task.gate.criteriaOk ? 'ok' : 'bad'">
-                    {{ task.gate.criteriaCount }} / {{ ACCEPTANCE_MIN_COUNT }}
+                  <strong :class="gate.criteriaOk ? 'ok' : 'bad'">
+                    {{ gate.criteriaCount }} / {{ ACCEPTANCE_MIN_COUNT }}
                   </strong>
                 </div>
                 <el-progress
                   :percentage="criteriaGatePercent"
-                  :status="task.gate.criteriaOk ? 'success' : 'warning'"
+                  :status="gate.criteriaOk ? 'success' : 'warning'"
                   :show-text="false"
                   :stroke-width="6"
                 />
-                <p class="gate-result" :class="task.gate.criteriaOk ? 'ok' : 'bad'">
-                  {{ task.gate.criteriaOk ? '已达标' : '未达标' }}
+                <p class="gate-result" :class="gate.criteriaOk ? 'ok' : 'bad'">
+                  {{ gate.criteriaOk ? '已达标' : '未达标' }}
+                </p>
+              </div>
+
+              <div class="gate-item">
+                <div class="gate-row">
+                  <span>通过验证数</span>
+                  <strong :class="gate.verificationOk ? 'ok' : 'bad'">
+                    {{ gate.passedVerifications }} / 1
+                  </strong>
+                </div>
+                <el-progress
+                  :percentage="verificationGatePercent"
+                  :status="gate.verificationOk ? 'success' : 'warning'"
+                  :show-text="false"
+                  :stroke-width="6"
+                />
+                <p
+                  class="gate-result"
+                  :class="gate.verificationOk ? 'ok' : 'bad'"
+                >
+                  {{ gate.verificationOk ? '已达标' : '未达标' }}
+                </p>
+              </div>
+
+              <div class="gate-item">
+                <div class="gate-row">
+                  <span>追溯</span>
+                  <strong
+                    class="wide"
+                    :class="gate.traceabilityOk ? 'ok' : 'bad'"
+                  >
+                    AI 会话 {{ gate.aiSessionCount }} 条 / 人工记录
+                    {{ gate.manualNoteLength }} / {{ MANUAL_NOTE_MIN_LENGTH }}
+                    字
+                  </strong>
+                </div>
+                <p
+                  class="gate-result"
+                  :class="gate.traceabilityOk ? 'ok' : 'bad'"
+                >
+                  {{ gate.traceabilityOk ? '已达标' : '未达标' }}
                 </p>
               </div>
             </div>
@@ -425,14 +909,14 @@ onMounted(load);
         <template #header>
           <div class="card-head">
             <span>流转记录</span>
-            <span class="card-kicker">{{ task.transitions.length }} 条</span>
+            <span class="card-kicker">{{ transitionRecords.length }} 条</span>
           </div>
         </template>
 
-        <p v-if="!task.transitions.length" class="muted">还没有流转记录。</p>
+        <p v-if="!transitionRecords.length" class="muted">还没有流转记录。</p>
 
         <ol v-else class="timeline">
-          <li v-for="record in task.transitions" :key="record.id">
+          <li v-for="record in transitionRecords" :key="record.id">
             <span class="timeline-dot" aria-hidden="true" />
             <div class="timeline-body">
               <div class="timeline-head">
@@ -719,6 +1203,122 @@ h1 {
   color: #9aa4b5;
 }
 
+.gate-row strong.wide {
+  max-width: 190px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.record-list {
+  display: grid;
+  gap: 12px;
+}
+
+.record-item {
+  padding: 12px 14px;
+  border: 1px solid #edf0f5;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.record-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.record-command {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #1f3a5f;
+  overflow-wrap: anywhere;
+}
+
+.record-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #18202f;
+  overflow-wrap: anywhere;
+}
+
+.record-delete {
+  flex: none;
+  margin-left: auto;
+}
+
+.record-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #4c586c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #9aa4b5;
+}
+
+.record-meta time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.evidence-link {
+  max-width: 100%;
+  color: #2f6fed;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.evidence-link--plain {
+  color: #9aa4b5;
+  text-decoration: none;
+}
+
+.evidence-link:hover {
+  text-decoration: underline;
+}
+
+.record-actions {
+  margin-top: 12px;
+}
+
+.record-form {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px dashed #edf0f5;
+}
+
+.record-form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 12px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .timeline-card :deep(.el-card__body) {
   padding: 18px 18px 8px;
 }
@@ -841,6 +1441,18 @@ h1 {
     grid-column: 2;
     justify-self: start;
     padding-left: 0;
+  }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .record-meta time {
+    margin-left: 0;
+  }
+
+  .gate-row strong.wide {
+    max-width: 100%;
   }
 }
 </style>

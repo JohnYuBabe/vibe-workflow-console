@@ -24,6 +24,19 @@ type DemoStatus =
   | 'review'
   | 'done';
 
+interface DemoVerification {
+  command: string;
+  result: 'passed' | 'failed';
+  evidenceUrl?: string;
+  note?: string;
+}
+
+interface DemoAiSession {
+  title: string;
+  tool?: string;
+  summary?: string;
+}
+
 interface DemoTask {
   title: string;
   status: DemoStatus;
@@ -33,6 +46,10 @@ interface DemoTask {
   manualNote?: string;
   /** 从首个状态开始的状态序列，相邻两项生成一条流转记录 */
   history: DemoStatus[];
+  /** 验证记录，用于完成门禁的真实数据来源 */
+  verifications?: DemoVerification[];
+  /** AI 会话记录，用于追溯门禁 */
+  aiSessions?: DemoAiSession[];
 }
 
 /** 流转备注，按目标状态取文案 */
@@ -45,8 +62,12 @@ const TRANSITION_NOTES: Record<DemoStatus, string> = {
 };
 
 /**
- * 演示任务。状态与历史刻意覆盖三类场景：
- * 可正常流转、规格门禁演示（c/d）、已完成规格评审的待开发任务（e）。
+ * 演示任务。状态与历史刻意覆盖以下场景：
+ * - 可正常流转；
+ * - 规格门禁演示（验证记录台账 / AI 会话台账）；
+ * - 已完成规格评审的待开发任务（决策记录）；
+ * - 追溯已满足、验证未通过仍被拦（登录与 JWT）；
+ * - 完成门禁可达成（完成门禁演示）。
  */
 const DEMO_TASKS: DemoTask[] = [
   {
@@ -62,6 +83,22 @@ const DEMO_TASKS: DemoTask[] = [
     manualNote:
       '登录链路已用无头浏览器走通：admin 登录后进入控制台，身份卡显示 5 条权限。',
     history: ['draft', 'ready', 'in_progress', 'review'],
+    // 只有未通过的验证：追溯已满足，但 review -> done 仍应被验证门禁拦下
+    verifications: [
+      {
+        command: 'pnpm --filter @vibe/server test',
+        result: 'failed',
+        note: '401 用例失败：已过期 Token 仍能访问 /api/auth/me，需要检查 JwtStrategy 的过期处理。',
+      },
+    ],
+    aiSessions: [
+      {
+        title: '登录链路排查与 JWT 校验',
+        tool: 'Claude Code',
+        summary:
+          '梳理登录、Token 持久化与路由守卫流程，定位过期 Token 校验缺口并记录待修复项。',
+      },
+    ],
   },
   {
     title: '规格门禁',
@@ -106,6 +143,33 @@ const DEMO_TASKS: DemoTask[] = [
       '被替代的决策保留原文，不就地覆盖',
     ],
     history: ['draft', 'ready'],
+  },
+  {
+    title: '完成门禁演示',
+    status: 'review',
+    position: 6,
+    spec: '演示 review 到 done 的完成门禁：任务需要至少一条通过的验证记录，并且能追溯到一条 AI 会话或不少于 20 字的人工记录。',
+    criteria: [
+      '任务详情展示通过验证数与追溯状态',
+      '补齐一条 passed 验证与一条 AI 会话后，完成按钮变为可用',
+      '缺少任一条件时，流转返回 409 并列出全部原因',
+    ],
+    history: ['draft', 'ready', 'in_progress', 'review'],
+    verifications: [
+      {
+        command: 'pnpm --filter @vibe/server test',
+        result: 'passed',
+        note: '完成门禁相关用例全部通过，review -> done 的候选流转由服务端判定为可用。',
+      },
+    ],
+    aiSessions: [
+      {
+        title: '完成门禁联调',
+        tool: 'Claude Code',
+        summary:
+          '补齐验证记录与 AI 会话接口后，联调 review -> done 的放行条件与错误原因展示。',
+      },
+    ],
   },
 ];
 
@@ -200,11 +264,40 @@ async function main(): Promise<void> {
               toStatus,
               actorId: admin.id,
               note: TRANSITION_NOTES[toStatus],
-              // 位置越靠前的任务历史越早，同一任务内按小时递进
+              // 位置越靠前的任务历史越早，同一任务内按小时递进；
+              // +1 保证最新的演示任务也落在过去，不会出现未来时间
               createdAt: new Date(
                 baseTime -
-                  (DEMO_TASKS.length - task.position) * DAY +
+                  (DEMO_TASKS.length - task.position + 1) * DAY +
                   index * HOUR,
+              ),
+            })),
+          },
+          verifications: {
+            create: (task.verifications ?? []).map((verification, index) => ({
+              command: verification.command,
+              result: verification.result,
+              evidenceUrl: verification.evidenceUrl ?? null,
+              note: verification.note ?? null,
+              createdById: admin.id,
+              // 记录排在流转历史之后，按小时递进
+              createdAt: new Date(
+                baseTime -
+                  (DEMO_TASKS.length - task.position + 1) * DAY +
+                  (task.history.length + index) * HOUR,
+              ),
+            })),
+          },
+          aiSessions: {
+            create: (task.aiSessions ?? []).map((session, index) => ({
+              title: session.title,
+              tool: session.tool ?? null,
+              summary: session.summary ?? null,
+              createdById: admin.id,
+              createdAt: new Date(
+                baseTime -
+                  (DEMO_TASKS.length - task.position + 1) * DAY +
+                  (task.history.length + index) * HOUR,
               ),
             })),
           },
