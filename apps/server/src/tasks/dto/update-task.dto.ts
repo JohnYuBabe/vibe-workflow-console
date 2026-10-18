@@ -1,11 +1,18 @@
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  Length,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 
 const trim = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim() : value;
 
 export class UpdateTaskDto {
-  @IsOptional()
+  // null 也要走 @IsString：@IsOptional 会放行 null，导致 Prisma 抛校验错变成 500
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(trim)
   @IsString({ message: '任务标题不能为空' })
   @Length(1, 120, { message: '任务标题长度需在 1 到 120 字之间' })

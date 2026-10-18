@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { AuthUser } from '@vibe/shared';
 import type { UserRef } from '../common/types';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertTaskMutable } from './assert-task-mutable.util';
 import type { CreateVerificationDto } from './dto/create-verification.dto';
 import type {
   VerificationResultValue,
@@ -45,18 +46,20 @@ export class VerificationsService {
     dto: CreateVerificationDto,
     actor: AuthUser,
   ): Promise<VerificationView> {
-    await this.ensureTask(taskId);
+    const verification = await this.prisma.$transaction(async (tx) => {
+      await assertTaskMutable(tx, taskId);
 
-    const verification = await this.prisma.verification.create({
-      data: {
-        taskId,
-        command: dto.command,
-        result: dto.result,
-        evidenceUrl: dto.evidenceUrl ?? null,
-        note: dto.note ?? null,
-        createdById: actor.id,
-      },
-      include: { createdBy: { select: userSelect } },
+      return tx.verification.create({
+        data: {
+          taskId,
+          command: dto.command,
+          result: dto.result,
+          evidenceUrl: dto.evidenceUrl ?? null,
+          note: dto.note ?? null,
+          createdById: actor.id,
+        },
+        include: { createdBy: { select: userSelect } },
+      });
     });
 
     return toView(verification);
@@ -76,15 +79,20 @@ export class VerificationsService {
 
   /** 记录不存在或不属于该任务时统一 404，避免暴露其他任务的记录 */
   async remove(taskId: string, verificationId: string): Promise<void> {
-    // 用 deleteMany 一步完成「校验归属 + 删除」：
-    // 先查再删会在并发删除时抛 Prisma P2025，变成 500 而不是 404。
-    const result = await this.prisma.verification.deleteMany({
-      where: { id: verificationId, taskId },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      // done 任务门禁已定格，删除证据会让任务停在 done 但不达标
+      await assertTaskMutable(tx, taskId);
 
-    if (result.count === 0) {
-      throw new NotFoundException('验证记录不存在');
-    }
+      // 用 deleteMany 一步完成「校验归属 + 删除」：
+      // 先查再删会在并发删除时抛 Prisma P2025，变成 500 而不是 404。
+      const result = await tx.verification.deleteMany({
+        where: { id: verificationId, taskId },
+      });
+
+      if (result.count === 0) {
+        throw new NotFoundException('验证记录不存在');
+      }
+    });
   }
 
   private async ensureTask(taskId: string): Promise<void> {

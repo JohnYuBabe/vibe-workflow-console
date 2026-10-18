@@ -570,6 +570,99 @@ describe('Day 3-4 门禁与决策 E2E', () => {
     expect(transition.text).not.toContain('passwordHash');
   });
 
+  it('done 任务删除验证返回 409 TASK_IMMUTABLE', async () => {
+    const response = await call<ErrorPayload>(
+      baseUrl,
+      `/tasks/${taskId}/verifications/${verificationId}`,
+      { method: 'DELETE', token: adminToken },
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('TASK_IMMUTABLE');
+    expect(response.body.message).toBe('已完成的任务不可修改规格或证据');
+
+    // 证据没有被删掉，任务完成后门禁保持达标
+    expect(
+      await prisma.verification.count({ where: { id: verificationId } }),
+    ).toBe(1);
+  });
+
+  it('done 任务不能删除，删除验证仍为 409', async () => {
+    const response = await call<ErrorPayload>(baseUrl, `/tasks/${taskId}`, {
+      method: 'DELETE',
+      token: adminToken,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('TASK_IMMUTABLE');
+    expect(await prisma.task.count({ where: { id: taskId } })).toBe(1);
+  });
+
+  it('PATCH 传 null 返回 400 而不是 500', async () => {
+    const taskResponse = await call<ErrorPayload>(
+      baseUrl,
+      `/tasks/${taskId}`,
+      { method: 'PATCH', token: adminToken, body: { title: null } },
+    );
+    expect(taskResponse.status).toBe(400);
+
+    const projectResponse = await call<ErrorPayload>(
+      baseUrl,
+      `/projects/${projectId}`,
+      { method: 'PATCH', token: adminToken, body: { name: null } },
+    );
+    expect(projectResponse.status).toBe(400);
+  });
+
+  it('删除任务返回 204，重复删除返回 404', async () => {
+    const created = await call<TaskDetailPayload>(
+      baseUrl,
+      `/projects/${projectId}/tasks`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: { title: '待删除任务' },
+      },
+    );
+    expect(created.status).toBe(201);
+    const removableTaskId = created.body.id;
+
+    // 带上验收标准，验证级联删除走的是真实路径
+    const criteria = await call(
+      baseUrl,
+      `/tasks/${removableTaskId}/criteria`,
+      {
+        method: 'PUT',
+        token: adminToken,
+        body: { items: ['临时验收标准'] },
+      },
+    );
+    expect(criteria.status).toBe(200);
+
+    const removed = await call(
+      baseUrl,
+      `/tasks/${removableTaskId}`,
+      { method: 'DELETE', token: adminToken },
+    );
+    expect(removed.status).toBe(204);
+    expect(
+      await prisma.task.count({ where: { id: removableTaskId } }),
+    ).toBe(0);
+    expect(
+      await prisma.acceptanceCriterion.count({
+        where: { taskId: removableTaskId },
+      }),
+    ).toBe(0);
+
+    const removedAgain = await call<ErrorPayload>(
+      baseUrl,
+      `/tasks/${removableTaskId}`,
+      { method: 'DELETE', token: adminToken },
+    );
+    expect(removedAgain.status).toBe(404);
+    expect(removedAgain.body.message).toBe('任务不存在');
+  });
+
   it('决策记录：空 taskId 落为 null，跨项目任务返回 400', async () => {
     const empty = await call<DecisionDetailPayload>(
       baseUrl,

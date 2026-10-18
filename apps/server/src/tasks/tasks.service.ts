@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { TaskStatus } from '@vibe/shared';
 import { availableTransitions } from '@vibe/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertTaskMutable } from './assert-task-mutable.util';
 import type { CreateTaskDto } from './dto/create-task.dto';
 import type { ListTasksQueryDto } from './dto/list-tasks-query.dto';
 import type { UpdateCriteriaDto } from './dto/update-criteria.dto';
@@ -59,13 +60,17 @@ export class TasksService {
         ...(query.projectId ? { projectId: query.projectId } : {}),
         ...(query.status ? { status: query.status } : {}),
       },
-      include: { _count: { select: { criteria: true } } },
+      include: {
+        _count: { select: { criteria: true } },
+        project: { select: { id: true, name: true } },
+      },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
 
     return tasks.map((task) => ({
       id: task.id,
       projectId: task.projectId,
+      project: { id: task.project.id, name: task.project.name },
       title: task.title,
       status: task.status as TaskStatus,
       criteriaCount: task._count.criteria,
@@ -150,17 +155,19 @@ export class TasksService {
   }
 
   async update(id: string, dto: UpdateTaskDto): Promise<TaskDetail> {
-    await this.ensureExists(id);
+    await this.prisma.$transaction(async (tx) => {
+      await assertTaskMutable(tx, id);
 
-    await this.prisma.task.update({
-      where: { id },
-      data: {
-        ...(dto.title !== undefined ? { title: dto.title } : {}),
-        ...(dto.spec !== undefined ? { spec: dto.spec } : {}),
-        ...(dto.manualNote !== undefined
-          ? { manualNote: dto.manualNote }
-          : {}),
-      },
+      await tx.task.update({
+        where: { id },
+        data: {
+          ...(dto.title !== undefined ? { title: dto.title } : {}),
+          ...(dto.spec !== undefined ? { spec: dto.spec } : {}),
+          ...(dto.manualNote !== undefined
+            ? { manualNote: dto.manualNote }
+            : {}),
+        },
+      });
     });
 
     return this.getDetail(id);
@@ -170,11 +177,12 @@ export class TasksService {
     id: string,
     dto: UpdateCriteriaDto,
   ): Promise<TaskDetail> {
-    await this.ensureExists(id);
     const items = cleanCriteria(dto.items);
 
-    // 按数组顺序重写：先清空再按 position 写入，过滤空串
+    // 按数组顺序重写：先在事务里锁住任务校验状态，再清空、按 position 写入
     await this.prisma.$transaction(async (tx) => {
+      await assertTaskMutable(tx, id);
+
       await tx.acceptanceCriterion.deleteMany({ where: { taskId: id } });
 
       if (items.length > 0) {
@@ -191,14 +199,18 @@ export class TasksService {
     return this.getDetail(id);
   }
 
-  private async ensureExists(id: string): Promise<void> {
-    const task = await this.prisma.task.findUnique({
-      where: { id },
-      select: { id: true },
-    });
+  /** 删除任务；记录不存在或已被并发删除时统一 404 */
+  async remove(id: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      // 删除会级联清掉验收标准、验证与追溯记录，done 任务必须保持一致不可删
+      await assertTaskMutable(tx, id);
 
-    if (!task) {
-      throw new NotFoundException('任务不存在');
-    }
+      // deleteMany 用 count 判定，并发删除不会抛 P2025 变成 500
+      const result = await tx.task.deleteMany({ where: { id } });
+
+      if (result.count === 0) {
+        throw new NotFoundException('任务不存在');
+      }
+    });
   }
 }

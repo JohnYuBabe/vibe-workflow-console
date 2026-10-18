@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { AuthUser } from '@vibe/shared';
 import type { UserRef } from '../common/types';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertTaskMutable } from './assert-task-mutable.util';
 import type { CreateAiSessionDto } from './dto/create-ai-session.dto';
 import type { AiSessionView } from './task.types';
 
@@ -40,17 +41,19 @@ export class AiSessionsService {
     dto: CreateAiSessionDto,
     actor: AuthUser,
   ): Promise<AiSessionView> {
-    await this.ensureTask(taskId);
+    const session = await this.prisma.$transaction(async (tx) => {
+      await assertTaskMutable(tx, taskId);
 
-    const session = await this.prisma.aiSession.create({
-      data: {
-        taskId,
-        title: dto.title,
-        tool: dto.tool ?? null,
-        summary: dto.summary ?? null,
-        createdById: actor.id,
-      },
-      include: { createdBy: { select: userSelect } },
+      return tx.aiSession.create({
+        data: {
+          taskId,
+          title: dto.title,
+          tool: dto.tool ?? null,
+          summary: dto.summary ?? null,
+          createdById: actor.id,
+        },
+        include: { createdBy: { select: userSelect } },
+      });
     });
 
     return toView(session);
@@ -70,14 +73,19 @@ export class AiSessionsService {
 
   /** 记录不存在或不属于该任务时统一 404，避免暴露其他任务的记录 */
   async remove(taskId: string, sessionId: string): Promise<void> {
-    // 先查再删在并发删除时会抛 Prisma P2025，变成 500 而不是 404
-    const result = await this.prisma.aiSession.deleteMany({
-      where: { id: sessionId, taskId },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      // done 任务门禁已定格，删除追溯记录同样被拒绝
+      await assertTaskMutable(tx, taskId);
 
-    if (result.count === 0) {
-      throw new NotFoundException('AI 会话不存在');
-    }
+      // 先查再删在并发删除时会抛 Prisma P2025，变成 500 而不是 404
+      const result = await tx.aiSession.deleteMany({
+        where: { id: sessionId, taskId },
+      });
+
+      if (result.count === 0) {
+        throw new NotFoundException('AI 会话不存在');
+      }
+    });
   }
 
   private async ensureTask(taskId: string): Promise<void> {

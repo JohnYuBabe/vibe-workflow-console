@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -57,6 +58,13 @@ export class TasksController {
     @Body() dto: UpdateTaskDto,
   ): Promise<TaskDetail> {
     return this.tasks.update(id, dto);
+  }
+
+  @Delete('tasks/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('task:write')
+  async remove(@Param('id') id: string): Promise<void> {
+    await this.tasks.remove(id);
   }
 
   @Put('tasks/:id/criteria')

@@ -51,6 +51,8 @@ function countOf(status: TaskStatus): number {
 
 const taskTotal = computed(() => summary.value?.totals.tasks ?? 0);
 const reviewCount = computed(() => countOf('review'));
+const projectTotal = computed(() => summary.value?.totals.projects ?? 0);
+const aiSessionTotal = computed(() => summary.value?.totals.aiSessions ?? 0);
 const decisionCount = computed(() => summary.value?.totals.decisions ?? 0);
 
 const statusSegments = computed(() =>
@@ -66,10 +68,10 @@ const statusSegments = computed(() =>
   }).filter((segment) => segment.count > 0),
 );
 
-/** 通过率按 0.00 展示；没有验证记录时显示破折号 */
+/** 通过率按百分比展示；没有验证记录时显示破折号 */
 const passRateText = computed(() => {
   const rate = summary.value?.verification.passRate;
-  return rate == null ? '—' : rate.toFixed(2);
+  return rate == null ? '—' : `${Math.round(rate * 100)}%`;
 });
 
 interface BlockedGroup {
@@ -112,18 +114,17 @@ const blockedGroups = computed<BlockedGroup[]>(() => {
   <div class="dashboard">
     <header class="page-head">
       <div class="head-main">
-        <p class="eyebrow">Day 4 · Delivery Metrics</p>
+        <p class="eyebrow">Delivery · 交付概览</p>
         <h1>交付控制台</h1>
         <p class="sub">
-          欢迎，{{ auth.user?.name ?? '开发者' }}。任务、验证与决策的指标汇总在这里，
-          数字来自服务端的一次快照；点开可跳转的卡片会回到对应的看板或项目。
+          欢迎，{{ auth.user?.name ?? '开发者' }}。任务、验证、会话与决策的指标
+          汇总在这里，点开可跳转的卡片会回到对应的看板或项目。
         </p>
       </div>
       <div class="head-side">
         <el-button type="primary" @click="router.push('/board')">
           任务看板
         </el-button>
-        <el-tag class="day-tag" effect="dark" type="primary">Day 4</el-tag>
       </div>
     </header>
 
@@ -185,6 +186,18 @@ const blockedGroups = computed<BlockedGroup[]>(() => {
             {{ summary.verification.passed }} / {{ summary.verification.total }}
             条验证通过
           </span>
+        </div>
+
+        <router-link to="/projects" class="stat-card">
+          <span class="stat-label">项目</span>
+          <strong class="stat-value">{{ projectTotal }}</strong>
+          <span class="stat-meta">查看全部项目 →</span>
+        </router-link>
+
+        <div class="stat-card">
+          <span class="stat-label">AI 会话</span>
+          <strong class="stat-value">{{ aiSessionTotal }}</strong>
+          <span class="stat-meta">在任务详情里记录</span>
         </div>
 
         <router-link to="/projects" class="stat-card">
@@ -278,7 +291,7 @@ const blockedGroups = computed<BlockedGroup[]>(() => {
       </section>
 
       <p class="generated">
-        数据生成于 {{ formatDateTime(summary.generatedAt) }}，指标由服务端单次快照计算。
+        数据生成于 {{ formatDateTime(summary.generatedAt) }}，刷新页面可获取最新数据。
       </p>
     </template>
 
@@ -332,10 +345,6 @@ h1 {
   gap: 10px;
   flex: none;
   margin-top: 4px;
-}
-
-.day-tag {
-  flex: none;
 }
 
 .identity-strip {
@@ -409,7 +418,7 @@ h1 {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 

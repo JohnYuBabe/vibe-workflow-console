@@ -216,6 +216,11 @@ export async function transitionTask(
   return data;
 }
 
+/** 删除任务；服务端返回 204，任务不存在时返回 404 */
+export async function deleteTask(id: string): Promise<void> {
+  await api.delete(`/tasks/${id}`);
+}
+
 /** 以下记录接口都挂在任务下；写操作需要 task:write，读操作需要 task:read */
 
 export async function fetchVerifications(

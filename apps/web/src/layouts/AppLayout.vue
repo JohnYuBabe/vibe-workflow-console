@@ -66,7 +66,7 @@ function logout(): void {
     <footer class="app-footer">
       <span>vibe-workflow-console</span>
       <span class="dot">·</span>
-      <span>Day 4 · 决策、看板与交付仪表盘</span>
+      <span>AI 辅助交付控制台</span>
     </footer>
   </div>
 </template>

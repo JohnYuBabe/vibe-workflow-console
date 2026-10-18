@@ -105,6 +105,18 @@ const visibleTaskCount = computed(() =>
   columns.value.reduce((sum, column) => sum + column.tasks.length, 0),
 );
 
+/** 优先用任务自带的项目信息，缺失时回退到已加载的项目列表 */
+function projectNameOf(task: TaskSummary): string {
+  if (task.project?.name) {
+    return task.project.name;
+  }
+  const projectId = task.projectId ?? task.project?.id;
+  const matched = projectId
+    ? projects.value.find((project) => project.id === projectId)
+    : undefined;
+  return matched?.name ?? '未归属项目';
+}
+
 const hasFilters = computed(() =>
   Boolean(projectFilter.value || keywordTerm.value || statusFilter.value),
 );
@@ -228,9 +240,7 @@ onMounted(load);
                 class="task-card"
               >
                 <h2 class="task-title">{{ task.title }}</h2>
-                <p class="task-project">
-                  {{ task.project?.name ?? '未归属项目' }}
-                </p>
+                <p class="task-project">{{ projectNameOf(task) }}</p>
                 <div class="task-meta">
                   <span>{{ criteriaCountOf(task) }} 条验收</span>
                   <time>{{ formatDateTime(task.updatedAt) }}</time>

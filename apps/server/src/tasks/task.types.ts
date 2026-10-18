@@ -13,6 +13,11 @@ export type VerificationResultValue = 'passed' | 'failed';
 export interface TaskSummary {
   id: string;
   projectId: string;
+  /**
+   * GET /tasks 总会返回所属项目；
+   * 项目详情的 tasks 直接挂在项目下，因此这里保持可选。
+   */
+  project?: { id: string; name: string };
   title: string;
   status: TaskStatus;
   criteriaCount: number;

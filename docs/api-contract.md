@@ -10,7 +10,7 @@ All responses are JSON. Errors use NestJS default shape:
 { "statusCode": 401, "message": "邮箱或密码错误", "error": "Unauthorized" }
 ```
 
-例外：门禁失败（`422 SPEC_GATE`、`409 SPEC_GATE/VERIFICATION_GATE/TRACEABILITY_GATE/INVALID_TRANSITION`）的 body 是 `{message, code, reasons}`，没有 `statusCode` 与 `error` 字段。
+例外：门禁失败（`422 SPEC_GATE`、`409 SPEC_GATE/VERIFICATION_GATE/TRACEABILITY_GATE/INVALID_TRANSITION`）的 body 是 `{message, code, reasons}`，没有 `statusCode` 与 `error` 字段。2026-10-19 起 `done` 任务的写操作与删除返回 `409 TASK_IMMUTABLE`，body 同样是 `{message, code, reasons}`。
 
 ## POST /api/auth/login
 

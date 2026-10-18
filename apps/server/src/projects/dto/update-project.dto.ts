@@ -4,13 +4,15 @@ import {
   IsString,
   Length,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim() : value;
 
 export class UpdateProjectDto {
-  @IsOptional()
+  // null 也要走 @IsString：@IsOptional 会放行 null，导致 Prisma 抛校验错变成 500
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(trim)
   @IsString({ message: '项目名称不能为空' })
   @Length(1, 80, { message: '项目名称长度需在 1 到 80 字之间' })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ACCEPTANCE_MIN_COUNT,
@@ -14,6 +14,7 @@ import {
   createAiSession,
   createVerification,
   deleteAiSession,
+  deleteTask,
   deleteVerification,
   fetchTask,
   replaceCriteria,
@@ -39,6 +40,7 @@ import { isForwardTransition, statusTagType } from '@/utils/task-status';
 
 const auth = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 
 const taskId = computed(() => String(route.params.id));
 
@@ -46,6 +48,7 @@ const task = ref<TaskDetail | null>(null);
 const loading = ref(true);
 const error = ref('');
 
+const titleDraft = ref('');
 const specDraft = ref('');
 const noteDraft = ref('');
 const criteriaDraft = ref<string[]>([]);
@@ -53,10 +56,15 @@ const transitionNote = ref('');
 
 const saving = ref(false);
 const transitioningTo = ref<TaskStatus | null>(null);
+const deletingTask = ref(false);
 
 const canWrite = computed(() => auth.hasPermission('task:write'));
 const currentStatus = computed<TaskStatus>(
   () => task.value?.status ?? 'draft',
+);
+/** done 任务的门禁与证据已定格，前端一并收掉写入口，避免用户填完才收到 409 */
+const canEdit = computed(
+  () => canWrite.value && currentStatus.value !== 'done',
 );
 const transitions = computed<AvailableTransition[]>(
   () => task.value?.availableTransitions ?? [],
@@ -67,6 +75,35 @@ const noteDraftLength = computed(() => noteDraft.value.trim().length);
 const criteriaFilledCount = computed(
   () => criteriaDraft.value.filter((item) => item.trim().length > 0).length,
 );
+
+/** 提交时会保存的验收标准，空行不计入 */
+const draftCriteria = computed(() =>
+  criteriaDraft.value.map((item) => item.trim()).filter(Boolean),
+);
+const savedCriteria = computed(() =>
+  (task.value?.criteria ?? [])
+    .map((criterion) => criterion.content.trim())
+    .filter(Boolean),
+);
+
+/** 标题、规格、验收标准或人工记录与服务端已保存值不同即为未保存 */
+const hasUnsavedChanges = computed(() => {
+  const current = task.value;
+  if (!current) {
+    return false;
+  }
+
+  const criteria = draftCriteria.value;
+  const saved = savedCriteria.value;
+
+  return (
+    titleDraft.value.trim() !== current.title.trim() ||
+    specDraft.value !== (current.spec ?? '') ||
+    noteDraft.value !== (current.manualNote ?? '') ||
+    criteria.length !== saved.length ||
+    criteria.some((item, index) => item !== saved[index])
+  );
+});
 
 function percentOf(value: number, target: number): number {
   if (target <= 0) {
@@ -152,6 +189,7 @@ function isHttpUrl(value: string | null | undefined): boolean {
 }
 
 function syncDraft(value: TaskDetail): void {
+  titleDraft.value = value.title;
   specDraft.value = value.spec ?? '';
   noteDraft.value = value.manualNote ?? '';
   criteriaDraft.value = value.criteria.length
@@ -209,31 +247,36 @@ function removeCriterion(index: number): void {
   }
 }
 
-async function save(): Promise<void> {
-  if (!task.value || !canWrite.value) {
-    return;
+async function doPersist(): Promise<boolean> {
+  if (!task.value || !canEdit.value) {
+    return false;
   }
 
+  const title = titleDraft.value.trim();
+  if (!title) {
+    ElMessage.warning('任务标题不能为空');
+    return false;
+  }
+
+  // 请求发出前同步取快照，避免网络往返期间的新编辑被混进这次保存
+  const spec = specDraft.value;
+  const manualNote = noteDraft.value;
+  const criteria = draftCriteria.value.slice();
+
   saving.value = true;
-  const criteria = criteriaDraft.value
-    .map((item) => item.trim())
-    .filter(Boolean);
-  let specSaved = false;
+  let contentSaved = false;
   let criteriaSaved = false;
 
   try {
     try {
-      await updateTask(taskId.value, {
-        spec: specDraft.value,
-        manualNote: noteDraft.value,
-      });
-      specSaved = true;
+      await updateTask(taskId.value, { title, spec, manualNote });
+      contentSaved = true;
     } catch (value: unknown) {
-      ElMessage.error(readApiError(value, '规格保存失败，请稍后重试。'));
+      ElMessage.error(readApiError(value, '任务内容保存失败，请稍后重试。'));
     }
 
-    // 规格没保存成功时不再动验收标准，避免只改一半
-    if (specSaved) {
+    // 基础内容没保存成功时不再动验收标准，避免只改一半
+    if (contentSaved) {
       try {
         await replaceCriteria(taskId.value, criteria);
         criteriaSaved = true;
@@ -241,43 +284,131 @@ async function save(): Promise<void> {
         ElMessage.error(
           readApiError(
             value,
-            '规格已保存，验收标准保存失败，请稍后重试。',
+            '基础内容已保存，验收标准保存失败，请稍后重试。',
           ),
         );
       }
     }
 
-    if (specSaved && criteriaSaved) {
-      ElMessage.success('已保存');
-    }
+    return contentSaved && criteriaSaved;
   } finally {
     saving.value = false;
-    // 规格已落库时以服务端为准，让门禁卡片和草稿保持同步
-    if (specSaved) {
-      await load({ silent: true, resetDrafts: true });
+    // 内容已落库时以服务端为准；不重置草稿，保存期间的新编辑会留在输入框里
+    if (contentSaved) {
+      await load({ silent: true, resetDrafts: false });
     }
   }
 }
 
+/** 同一时间只允许一次保存；流转前的自动保存会复用进行中的请求 */
+let savingPromise: Promise<boolean> | null = null;
+
+function persistOnce(): Promise<boolean> {
+  if (!savingPromise) {
+    savingPromise = doPersist()
+      .catch(() => false)
+      .finally(() => {
+        savingPromise = null;
+      });
+  }
+  return savingPromise;
+}
+
+/**
+ * 保存到没有未保存修改为止。
+ * 保存期间用户继续编辑时，等这一轮结束再提交一轮，避免静默丢弃。
+ */
+async function persistDrafts(): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (savingPromise) {
+      const ok = await savingPromise;
+      if (!ok) {
+        return false;
+      }
+      continue;
+    }
+
+    if (!hasUnsavedChanges.value) {
+      return true;
+    }
+
+    const ok = await persistOnce();
+    if (!ok) {
+      return false;
+    }
+  }
+
+  return !hasUnsavedChanges.value;
+}
+
+async function save(): Promise<void> {
+  if (await persistDrafts()) {
+    ElMessage.success('已保存');
+  }
+}
+
 async function applyTransition(item: AvailableTransition): Promise<void> {
-  if (!task.value || !canWrite.value || !item.allowed) {
+  if (!task.value || !canEdit.value || transitioningTo.value) {
     return;
   }
 
   transitioningTo.value = item.to;
   try {
+    // 有未保存的修改时先落库，保存失败则中止流转
+    if (hasUnsavedChanges.value) {
+      const saved = await persistDrafts();
+      if (!saved) {
+        return;
+      }
+    }
+
     await transitionTask(taskId.value, {
       to: item.to,
       note: transitionNote.value.trim() || undefined,
     });
     transitionNote.value = '';
     ElMessage.success(`已流转到「${TASK_STATUS_LABELS[item.to]}」`);
-    // 流转后刷新门禁与候选按钮，但保留用户还没保存的编辑内容
+    // 流转后刷新门禁与候选操作，但保留用户还没保存的编辑内容
     await load({ silent: true, resetDrafts: false });
   } catch (value: unknown) {
     ElMessage.error(readApiError(value, '流转失败，请稍后重试。'));
   } finally {
     transitioningTo.value = null;
+  }
+}
+
+async function removeTask(): Promise<void> {
+  const current = task.value;
+  if (!current || !canEdit.value || deletingTask.value) {
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `删除任务「${current.title}」及其验证记录、AI 会话和流转历史，操作无法撤销。`,
+      '删除任务',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  deletingTask.value = true;
+  try {
+    await deleteTask(current.id);
+    ElMessage.success('任务已删除');
+    await router.push({
+      name: 'project-detail',
+      params: { id: current.project.id },
+    });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '删除任务失败，请稍后重试。'));
+  } finally {
+    deletingTask.value = false;
   }
 }
 
@@ -290,7 +421,7 @@ function openVerificationForm(): void {
 }
 
 async function submitVerification(): Promise<void> {
-  if (!canWrite.value || savingVerification.value) {
+  if (!canEdit.value || savingVerification.value) {
     return;
   }
 
@@ -320,7 +451,7 @@ async function submitVerification(): Promise<void> {
 }
 
 async function removeVerification(record: VerificationView): Promise<void> {
-  if (!canWrite.value) {
+  if (!canEdit.value) {
     return;
   }
 
@@ -358,7 +489,7 @@ function openAiSessionForm(): void {
 }
 
 async function submitAiSession(): Promise<void> {
-  if (!canWrite.value || savingAiSession.value) {
+  if (!canEdit.value || savingAiSession.value) {
     return;
   }
 
@@ -386,7 +517,7 @@ async function submitAiSession(): Promise<void> {
 }
 
 async function removeAiSession(session: AiSessionView): Promise<void> {
-  if (!canWrite.value) {
+  if (!canEdit.value) {
     return;
   }
 
@@ -451,8 +582,39 @@ onMounted(() => {
 
     <template v-else-if="task">
       <header class="page-head">
-        <p class="eyebrow">Task · 任务</p>
-        <h1>{{ task.title }}</h1>
+        <div class="head-top">
+          <p class="eyebrow">任务</p>
+          <el-button
+            v-if="canEdit"
+            class="delete-task"
+            text
+            type="danger"
+            :loading="deletingTask"
+            @click="removeTask"
+          >
+            删除任务
+          </el-button>
+        </div>
+        <div class="title-row">
+          <el-input
+            v-if="canEdit"
+            v-model="titleDraft"
+            class="title-input"
+            maxlength="120"
+            aria-label="任务标题"
+            placeholder="任务标题"
+          />
+          <h1 v-else>{{ task.title }}</h1>
+          <el-tag
+            v-if="hasUnsavedChanges"
+            class="unsaved-tag"
+            size="small"
+            type="warning"
+            effect="plain"
+          >
+            未保存
+          </el-tag>
+        </div>
         <div class="head-meta">
           <el-tag effect="dark" :type="statusTagType(task.status)">
             {{ TASK_STATUS_LABELS[task.status] }}
@@ -473,7 +635,7 @@ onMounted(() => {
             <template #header>
               <div class="card-head">
                 <span>规格</span>
-                <span class="card-kicker">spec</span>
+                <span class="card-kicker">至少 {{ SPEC_MIN_LENGTH }} 字</span>
               </div>
             </template>
 
@@ -489,7 +651,7 @@ onMounted(() => {
                 v-model="specDraft"
                 type="textarea"
                 :rows="7"
-                :disabled="!canWrite"
+                :disabled="!canEdit"
                 aria-label="任务规格"
                 placeholder="写清楚要做什么、边界是什么、怎样算做完。进入开发前至少 20 字。"
               />
@@ -507,7 +669,7 @@ onMounted(() => {
                 v-model="noteDraft"
                 type="textarea"
                 :rows="4"
-                :disabled="!canWrite"
+                :disabled="!canEdit"
                 aria-label="人工记录"
                 placeholder="记录人工判断、命令行验证或决策过程。标记完成时，AI 会话或不少于 20 字的人工记录必须有一个。"
               />
@@ -537,11 +699,11 @@ onMounted(() => {
                 <span class="criterion-index">{{ index + 1 }}</span>
                 <el-input
                   v-model="criteriaDraft[index]"
-                  :disabled="!canWrite"
+                  :disabled="!canEdit"
                   placeholder="一条可验证的验收标准"
                 />
                 <el-button
-                  v-if="canWrite"
+                  v-if="canEdit"
                   text
                   type="danger"
                   @click="removeCriterion(index)"
@@ -550,7 +712,7 @@ onMounted(() => {
                 </el-button>
               </div>
 
-              <el-button v-if="canWrite" text type="primary" @click="addCriterion">
+              <el-button v-if="canEdit" text type="primary" @click="addCriterion">
                 + 添加一条
               </el-button>
             </div>
@@ -560,9 +722,13 @@ onMounted(() => {
             </p>
           </el-card>
 
-          <div v-if="canWrite" class="save-bar">
-            <span class="hint">
-              保存会调用 PATCH 更新规格与人工记录，并整体替换验收标准。
+          <div v-if="canEdit" class="save-bar">
+            <span class="hint" :class="{ 'hint--dirty': hasUnsavedChanges }">
+              {{
+                hasUnsavedChanges
+                  ? '有未保存的修改，流转前会自动保存。'
+                  : '修改标题、规格、验收标准或人工记录后请保存。'
+              }}
             </span>
             <el-button type="primary" :loading="saving" @click="save">
               保存修改
@@ -597,7 +763,7 @@ onMounted(() => {
                   </el-tag>
                   <code class="record-command">{{ record.command }}</code>
                   <el-button
-                    v-permission="'task:write'"
+                    v-if="canEdit"
                     class="record-delete"
                     text
                     type="danger"
@@ -634,7 +800,7 @@ onMounted(() => {
 
             <div class="record-actions">
               <el-button
-                v-permission="'task:write'"
+                v-if="canEdit"
                 text
                 type="primary"
                 @click="openVerificationForm"
@@ -655,7 +821,7 @@ onMounted(() => {
                     v-model="verificationForm.command"
                     maxlength="500"
                     show-word-limit
-                    placeholder="例如：pnpm --filter @vibe/server test"
+                    placeholder="例如：pnpm test"
                   />
                 </el-form-item>
                 <el-form-item label="结果" required>
@@ -724,7 +890,7 @@ onMounted(() => {
                 <div class="record-head">
                   <strong class="record-title">{{ session.title }}</strong>
                   <el-button
-                    v-permission="'task:write'"
+                    v-if="canEdit"
                     class="record-delete"
                     text
                     type="danger"
@@ -748,7 +914,7 @@ onMounted(() => {
 
             <div class="record-actions">
               <el-button
-                v-permission="'task:write'"
+                v-if="canEdit"
                 text
                 type="primary"
                 @click="openAiSessionForm"
@@ -851,9 +1017,13 @@ onMounted(() => {
             <template #header>
               <div class="card-head">
                 <span>任务门禁</span>
-                <span class="card-kicker">服务端判定</span>
+                <span class="card-kicker">以服务端校验为准</span>
               </div>
             </template>
+
+            <p v-if="hasUnsavedChanges" class="gate-stale">
+              有未保存的修改，保存后门禁状态会同步更新。
+            </p>
 
             <div class="gate-list">
               <div class="gate-item">
@@ -935,7 +1105,7 @@ onMounted(() => {
             </div>
 
             <p class="gate-note">
-              门禁由服务端与 @vibe/shared 的同一份策略计算，前端只展示结果，不自行判断。
+              门禁状态以服务端校验为准；修改内容并保存后，此处会同步更新。
             </p>
           </el-card>
 
@@ -943,7 +1113,7 @@ onMounted(() => {
             <template #header>
               <div class="card-head">
                 <span>状态流转</span>
-                <span class="card-kicker">availableTransitions</span>
+                <span class="card-kicker">当前可执行的操作</span>
               </div>
             </template>
 
@@ -962,6 +1132,10 @@ onMounted(() => {
                 class="note-input"
               />
 
+              <p v-if="hasUnsavedChanges" class="hint transition-hint">
+                有未保存的修改，点击后先保存，再以服务端校验结果为准。
+              </p>
+
               <div v-if="transitions.length" class="transition-list">
                 <div
                   v-for="item in transitions"
@@ -976,14 +1150,17 @@ onMounted(() => {
                         : 'default'
                     "
                     :plain="!isForwardTransition(currentStatus, item.to)"
-                    :disabled="!item.allowed"
+                    :disabled="!hasUnsavedChanges && !item.allowed"
                     :loading="transitioningTo === item.to"
                     @click="applyTransition(item)"
                   >
                     {{ transitionLabel(item) }}
                   </el-button>
 
-                  <ul v-if="item.reasons.length" class="reasons">
+                  <ul
+                    v-if="!hasUnsavedChanges && item.reasons.length"
+                    class="reasons"
+                  >
                     <li v-for="reason in item.reasons" :key="reason">
                       {{ reason }}
                     </li>
@@ -1050,6 +1227,53 @@ onMounted(() => {
 .page-head {
   display: grid;
   gap: 8px;
+}
+
+.head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delete-task {
+  flex: none;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.title-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.title-input :deep(.el-input__wrapper) {
+  padding: 0 4px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.title-input :deep(.el-input__wrapper:hover),
+.title-input :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px #d7dfeb inset;
+}
+
+.title-input :deep(.el-input__inner) {
+  height: 40px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  color: #18202f;
+}
+
+.unsaved-tag {
+  flex: none;
 }
 
 .eyebrow {
@@ -1177,6 +1401,10 @@ h1 {
   color: #9aa4b5;
 }
 
+.hint--dirty {
+  color: #b7791f;
+}
+
 .criteria-editor {
   display: grid;
   gap: 8px;
@@ -1213,6 +1441,16 @@ h1 {
 
 .save-bar :deep(.el-button) {
   flex: none;
+}
+
+.gate-stale {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fdf6e8;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #b7791f;
 }
 
 .gate-list {
@@ -1261,6 +1499,11 @@ h1 {
 
 .note-input {
   margin-bottom: 12px;
+}
+
+.transition-hint {
+  margin: 0 0 12px;
+  color: #b7791f;
 }
 
 .transition-list {
@@ -1577,6 +1820,10 @@ h1 {
   }
 
   h1 {
+    font-size: 24px;
+  }
+
+  .title-input :deep(.el-input__inner) {
     font-size: 24px;
   }
 

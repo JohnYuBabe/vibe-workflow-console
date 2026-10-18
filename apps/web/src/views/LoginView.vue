@@ -49,10 +49,10 @@ function readError(value: unknown): string {
       return body.message;
     }
     if (value.code === 'ECONNABORTED') {
-      return '请求超时，请确认服务端已启动。';
+      return '请求超时，请稍后重试。';
     }
     if (!value.response) {
-      return '无法连接服务端，请确认 API 已启动。';
+      return '无法连接服务，请稍后重试。';
     }
   }
 
@@ -116,7 +116,7 @@ async function submit(): Promise<void> {
       </ul>
 
       <p class="brand-foot">
-        Day 4 · 登录权限、三道门禁、决策记录、看板与交付仪表盘均已上线
+        规格、验证、追溯三道门禁 · 决策记录与交付指标
       </p>
     </section>
 
@@ -193,9 +193,7 @@ async function submit(): Promise<void> {
         </div>
       </el-card>
 
-      <p class="side-foot">
-        vibe-workflow-console · 本地 demo · 数据每日可重置
-      </p>
+      <p class="side-foot">vibe-workflow-console · 本地演示环境</p>
     </section>
   </div>
 </template>

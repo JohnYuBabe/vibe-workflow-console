@@ -10,6 +10,7 @@ import {
 import {
   deleteProject,
   fetchProject,
+  updateProject,
   type ProjectDetail,
 } from '@/api/projects';
 import {
@@ -90,6 +91,14 @@ const form = reactive({
   title: '',
   spec: '',
   criteria: ['', '', ''],
+});
+
+const projectDialogVisible = ref(false);
+const projectSubmitting = ref(false);
+const projectForm = reactive({
+  name: '',
+  description: '',
+  repoUrl: '',
 });
 
 async function loadProject(): Promise<void> {
@@ -222,6 +231,58 @@ async function removeProject(): Promise<void> {
     await router.push({ name: 'projects' });
   } catch (value: unknown) {
     ElMessage.error(readApiError(value, '删除项目失败，请稍后重试。'));
+  }
+}
+
+function openProjectDialog(): void {
+  const current = project.value;
+  if (!current) {
+    return;
+  }
+  projectForm.name = current.name;
+  projectForm.description = current.description ?? '';
+  projectForm.repoUrl = current.repoUrl ?? '';
+  projectDialogVisible.value = true;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function submitProject(): Promise<void> {
+  if (projectSubmitting.value) return;
+
+  const name = projectForm.name.trim();
+  if (!name) {
+    ElMessage.warning('请输入项目名称');
+    return;
+  }
+
+  const repoUrl = projectForm.repoUrl.trim();
+  if (repoUrl && !isHttpUrl(repoUrl)) {
+    ElMessage.warning('仓库地址需以 http:// 或 https:// 开头');
+    return;
+  }
+
+  projectSubmitting.value = true;
+  try {
+    const updated = await updateProject(projectId.value, {
+      name,
+      description: projectForm.description.trim() || null,
+      repoUrl: repoUrl || null,
+    });
+    project.value = updated;
+    projectDialogVisible.value = false;
+    ElMessage.success('项目已更新');
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '更新项目失败，请稍后重试。'));
+  } finally {
+    projectSubmitting.value = false;
   }
 }
 
@@ -459,6 +520,13 @@ onMounted(loadAll);
             @click="openDialog"
           >
             新建任务
+          </el-button>
+          <el-button
+            v-permission="'project:write'"
+            plain
+            @click="openProjectDialog"
+          >
+            编辑项目
           </el-button>
           <el-button
             v-permission="'project:write'"
@@ -701,6 +769,54 @@ onMounted(loadAll);
         </template>
       </el-card>
     </template>
+
+    <el-dialog
+      v-model="projectDialogVisible"
+      title="编辑项目"
+      width="min(480px, 92vw)"
+      :close-on-click-modal="false"
+    >
+      <el-form label-position="top" @submit.prevent="submitProject">
+        <el-form-item label="项目名称" required>
+          <el-input
+            v-model="projectForm.name"
+            placeholder="例如：vibe-workflow-console"
+            maxlength="80"
+            show-word-limit
+          />
+        </el-form-item>
+
+        <el-form-item label="项目描述">
+          <el-input
+            v-model="projectForm.description"
+            type="textarea"
+            :rows="3"
+            maxlength="2000"
+            show-word-limit
+            placeholder="一句话说明这个项目要交付什么"
+          />
+        </el-form-item>
+
+        <el-form-item label="仓库地址">
+          <el-input
+            v-model="projectForm.repoUrl"
+            maxlength="191"
+            placeholder="https://github.com/owner/repo"
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="projectDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="projectSubmitting"
+          @click="submitProject"
+        >
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="dialogVisible"
