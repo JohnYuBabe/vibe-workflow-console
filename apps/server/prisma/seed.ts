@@ -52,6 +52,17 @@ interface DemoTask {
   aiSessions?: DemoAiSession[];
 }
 
+interface DemoDecision {
+  title: string;
+  context: string;
+  options: string;
+  decision: string;
+  consequences?: string;
+  status: 'proposed' | 'accepted' | 'superseded';
+  /** 关联任务标题，任务不存在时留空 */
+  taskTitle?: string;
+}
+
 /** 流转备注，按目标状态取文案 */
 const TRANSITION_NOTES: Record<DemoStatus, string> = {
   draft: '退回补充规格',
@@ -143,6 +154,14 @@ const DEMO_TASKS: DemoTask[] = [
       '被替代的决策保留原文，不就地覆盖',
     ],
     history: ['draft', 'ready'],
+    aiSessions: [
+      {
+        title: '决策记录字段设计',
+        tool: 'Claude Code',
+        summary:
+          '讨论决策记录需要保存背景、候选方案、最终选择与后续复核条件，并确定关联任务的可选关系。',
+      },
+    ],
   },
   {
     title: '完成门禁演示',
@@ -170,6 +189,140 @@ const DEMO_TASKS: DemoTask[] = [
           '补齐验证记录与 AI 会话接口后，联调 review -> done 的放行条件与错误原因展示。',
       },
     ],
+  },
+  {
+    title: '任务看板',
+    status: 'in_progress',
+    position: 7,
+    spec: '按五种状态分列展示任务卡片，卡片显示标题、所属项目、验收标准条数与更新时间；支持按项目与关键字筛选，从仪表盘进入时可只显示单个状态列。',
+    criteria: [
+      '看板固定五列，列内按更新时间倒序展示任务卡片',
+      '卡片显示标题、项目名、验收标准条数与更新时间',
+      '项目下拉与关键字输入可组合筛选，清空后恢复全部任务',
+    ],
+    history: ['draft', 'ready', 'in_progress'],
+    aiSessions: [
+      {
+        title: '看板布局与筛选联调',
+        tool: 'Claude Code',
+        summary:
+          '确定五列看板的宽度与横向滚动边界，实现项目与关键字组合筛选并处理空列状态。',
+      },
+    ],
+  },
+  {
+    title: '仪表盘统计',
+    status: 'ready',
+    position: 8,
+    spec: '仪表盘展示任务总数、待审查数量、验证通过率与决策记录数，按状态分布展示任务数量，并列出规格、验证、追溯三组阻塞任务。',
+    criteria: [
+      '四张统计卡片的数据与任务、验证、决策接口一致',
+      '状态分布展示五种状态的数量，无验证记录时通过率显示为不可计算',
+      '三组阻塞任务均可点击跳转到对应任务详情',
+    ],
+    history: ['draft', 'ready'],
+  },
+  {
+    title: 'E2E 回归',
+    status: 'done',
+    position: 9,
+    spec: 'E2E 覆盖登录、项目创建、任务流转与完成门禁，每次提交在 CI 中执行；失败时保留截图与日志，便于定位回归问题。',
+    criteria: [
+      'E2E 用例覆盖登录、项目创建与任务完整流转',
+      'CI 中 E2E 失败时保留截图与运行日志',
+      '全部用例在本地与 CI 均能稳定通过',
+    ],
+    history: ['draft', 'ready', 'in_progress', 'review', 'done'],
+    verifications: [
+      {
+        command: 'pnpm --filter @vibe/server test',
+        result: 'passed',
+        note: '服务端单元测试全部通过；仓库当前没有覆盖登录与任务流转的 E2E 用例。',
+      },
+    ],
+    aiSessions: [
+      {
+        title: 'E2E 用例补齐与回归',
+        tool: 'Claude Code',
+        summary:
+          '补齐任务流转与完成门禁用例，修复选择器不稳定导致的偶发失败。',
+      },
+    ],
+  },
+  {
+    title: '看板筛选',
+    status: 'review',
+    position: 10,
+    spec: '看板支持从仪表盘携带 ?status= 参数进入，此时只展示该状态列并提供返回完整看板的入口；项目与关键字筛选即时生效，页面本身不出现横向滚动。',
+    criteria: [
+      '带 ?status=review 进入时只显示待审查列，并有返回完整看板的链接',
+      '切换项目或关键字后筛选结果即时更新，清空后恢复全部任务',
+      '390、760、1280 宽度下页面均无横向滚动',
+    ],
+    // 追溯门禁的真实阻塞示例：没有 AI 会话，人工记录也不足 20 字
+    manualNote: '筛选交互已人工走查',
+    history: ['draft', 'ready', 'in_progress', 'review'],
+    verifications: [
+      {
+        command: '手动验证：看板筛选',
+        result: 'passed',
+        note: '看板筛选已人工走查，390/760/1280px 均无横向滚动。',
+      },
+    ],
+  },
+];
+
+/**
+ * 演示决策记录。按任务标题关联，三份记录分别覆盖：
+ * 已接受的门禁位置选择、已接受的事务内条件写、待评审的 E2E 选型。
+ */
+const DEMO_DECISIONS: DemoDecision[] = [
+  {
+    title: '门禁逻辑为什么放在 packages/shared',
+    taskTitle: '完成门禁演示',
+    status: 'accepted',
+    context:
+      '规格、验证与追溯三道门禁既要在后端拦截流转，也要在前端提前展示按钮可用性与缺口原因。最初前后端各写一份判断，导致字数口径与提示文案逐渐不一致。',
+    options: [
+      '后端维护门禁判断，前端只展示接口返回的结果',
+      '前后端各写一份判断，靠测试保证一致',
+      '把纯函数门禁抽到 packages/shared，前后端共用',
+    ].join('\n'),
+    decision:
+      '在 packages/shared 中实现 summarizeSpecGate 与 summarizeCompletionGate 等纯函数，后端流转与前端展示调用同一份实现。',
+    consequences:
+      '门禁口径只有一处，修改规则时前端提示同步生效；代价是 shared 需要保持无框架依赖，构建顺序上必须先于 server 与 web。',
+  },
+  {
+    title: '状态流转为什么用事务内条件写',
+    taskTitle: '任务看板',
+    status: 'accepted',
+    context:
+      '状态流转需要先读取任务与门禁数据、再写流转记录和任务状态。并发请求下，先读后写会把同一条任务从 review 同时流转到 done 和 in_progress，产生两条出边。',
+    options: [
+      '读取后直接更新，靠前端按钮防重复点击',
+      '对任务行加锁后再判断并更新',
+      '把门禁判定与条件更新放进同一事务，按原状态做条件写',
+    ].join('\n'),
+    decision:
+      '在事务内以原状态作为更新条件执行 updateMany，只有命中一条时才写入流转记录；未命中返回 409。',
+    consequences:
+      '并发流转只有一个请求成功，历史记录保持单条出边；代价是冲突时需要返回明确的提示，前端要处理 409 而不是重试。',
+  },
+  {
+    title: 'E2E 为什么不引入 supertest',
+    status: 'proposed',
+    context:
+      '现有 E2E 用例通过真实 HTTP 请求覆盖登录、项目与任务流转。为了直接调用 Nest 应用实例，讨论过引入 supertest 以减少启动开销。',
+    options: [
+      '引入 supertest，在进程内调用 Nest 应用',
+      '保持现有真实 HTTP 请求的写法',
+      '只保留单元测试，取消 E2E',
+    ].join('\n'),
+    decision:
+      '当前保持真实 HTTP 请求，不新增依赖；如果后续用例数量增长导致启动时间明显变长，再评估 supertest。',
+    consequences:
+      '不引入新依赖，E2E 与生产请求路径一致；代价是用例执行需要先启动服务，CI 中的等待时间更长。',
   },
 ];
 
@@ -245,6 +398,9 @@ async function main(): Promise<void> {
       // 仓库尚未公开，先留空
       repoUrl: null,
       ownerId: admin.id,
+      // 项目先于全部任务存在，更新时间保持在基准时间
+      createdAt: new Date(baseTime - (DEMO_TASKS.length + 3) * DAY),
+      updatedAt: new Date(baseTime),
       tasks: {
         create: DEMO_TASKS.map((task) => ({
           title: task.title,
@@ -252,10 +408,21 @@ async function main(): Promise<void> {
           manualNote: task.manualNote ?? null,
           status: task.status,
           position: task.position,
+          // 任务晚于项目创建、早于各自的全部流转与记录
+          createdAt: new Date(
+            baseTime - (DEMO_TASKS.length - task.position + 1) * DAY - HOUR,
+          ),
+          updatedAt: new Date(
+            baseTime - (DEMO_TASKS.length - task.position) * DAY,
+          ),
           criteria: {
             create: task.criteria.map((content, index) => ({
               content,
               position: index + 1,
+              // 验收标准在任务创建之后、任务更新之前
+              createdAt: new Date(
+                baseTime - (DEMO_TASKS.length - task.position + 1) * DAY,
+              ),
             })),
           },
           transitions: {
@@ -307,6 +474,42 @@ async function main(): Promise<void> {
     include: { tasks: true },
   });
 
+  const taskByTitle = new Map(project.tasks.map((task) => [task.title, task]));
+
+  // 决策记录排在任务之后，按天递进且全部落在过去
+  const decisions = await prisma.decision.createMany({
+    data: DEMO_DECISIONS.map((decision, index) => {
+      let taskId: string | null = null;
+      if (decision.taskTitle) {
+        const task = taskByTitle.get(decision.taskTitle);
+        if (!task) {
+          throw new Error(
+            `演示决策「${decision.title}」关联的任务「${decision.taskTitle}」不存在`,
+          );
+        }
+        taskId = task.id;
+      }
+
+      const createdAt = new Date(
+        baseTime - (DEMO_DECISIONS.length - index + 1) * DAY,
+      );
+
+      return {
+        projectId: project.id,
+        taskId,
+        title: decision.title,
+        context: decision.context,
+        options: decision.options,
+        decision: decision.decision,
+        consequences: decision.consequences ?? null,
+        status: decision.status,
+        createdById: admin.id,
+        createdAt,
+        updatedAt: createdAt,
+      };
+    }),
+  });
+
   console.log(
     'Seed complete:',
     DEMO_ACCOUNTS.map(
@@ -314,7 +517,7 @@ async function main(): Promise<void> {
     ).join(', '),
   );
   console.log(
-    `Demo 项目「${project.name}」已重建，包含 ${project.tasks.length} 个任务。`,
+    `Demo 项目「${project.name}」已重建，包含 ${project.tasks.length} 个任务、${decisions.count} 条决策记录。`,
   );
 }
 

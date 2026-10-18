@@ -19,6 +19,7 @@ model User {
   taskTransitions TaskTransition[]
   verifications   Verification[]
   aiSessions      AiSession[]
+  decisions       Decision[]
 
   @@map("users")
 }
@@ -73,15 +74,16 @@ enum TaskStatus {
 }
 
 model Project {
-  id          String   @id @default(cuid())
+  id          String     @id @default(cuid())
   name        String
-  description String?  @db.Text
+  description String?    @db.Text
   repoUrl     String?
   ownerId     String
-  owner       User     @relation("ProjectOwner", fields: [ownerId], references: [id])
+  owner       User       @relation("ProjectOwner", fields: [ownerId], references: [id])
   tasks       Task[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  decisions   Decision[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@map("projects")
 }
@@ -99,6 +101,7 @@ model Task {
   transitions   TaskTransition[]
   verifications Verification[]
   aiSessions    AiSession[]
+  decisions     Decision[]
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
 
@@ -167,4 +170,32 @@ model AiSession {
 
   @@index([taskId])
   @@map("ai_sessions")
+}
+
+enum DecisionStatus {
+  proposed
+  accepted
+  superseded
+}
+
+model Decision {
+  id           String         @id @default(cuid())
+  projectId    String
+  taskId       String?
+  title        String         @db.VarChar(200)
+  context      String         @db.Text
+  options      String         @db.Text
+  decision     String         @db.Text
+  consequences String?        @db.Text
+  status       DecisionStatus @default(proposed)
+  createdById  String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task         Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  createdBy    User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status])
+  @@index([taskId])
+  @@map("decisions")
 }

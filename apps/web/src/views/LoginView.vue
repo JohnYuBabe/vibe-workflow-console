@@ -116,7 +116,7 @@ async function submit(): Promise<void> {
       </ul>
 
       <p class="brand-foot">
-        Day 1 · 登录与权限已跑通，三条门禁开发中
+        Day 4 · 登录权限、三道门禁、决策记录、看板与交付仪表盘均已上线
       </p>
     </section>
 

@@ -26,6 +26,12 @@ import {
   type VerificationResult,
   type VerificationView,
 } from '@/api/tasks';
+import {
+  DECISION_STATUS_LABELS,
+  decisionStatusTagType,
+  fetchDecisions,
+  type DecisionSummary,
+} from '@/api/decisions';
 import { useAuthStore } from '@/stores/auth';
 import { readApiError } from '@/utils/api-error';
 import { formatDateTime } from '@/utils/format';
@@ -110,6 +116,8 @@ const verifications = computed<VerificationView[]>(
 const aiSessions = computed<AiSessionView[]>(
   () => task.value?.aiSessions ?? [],
 );
+/** 关联决策只读展示，列表只返回摘要，有记录时才渲染卡片 */
+const decisions = ref<DecisionSummary[]>([]);
 
 const verificationFormOpen = ref(false);
 const savingVerification = ref(false);
@@ -182,6 +190,14 @@ async function load(
   }
 }
 
+async function loadDecisions(): Promise<void> {
+  try {
+    decisions.value = await fetchDecisions({ taskId: taskId.value });
+  } catch (value: unknown) {
+    ElMessage.error(readApiError(value, '加载关联决策失败，请稍后重试。'));
+  }
+}
+
 function addCriterion(): void {
   criteriaDraft.value.push('');
 }
@@ -199,23 +215,47 @@ async function save(): Promise<void> {
   }
 
   saving.value = true;
+  const criteria = criteriaDraft.value
+    .map((item) => item.trim())
+    .filter(Boolean);
+  let specSaved = false;
+  let criteriaSaved = false;
+
   try {
-    const criteria = criteriaDraft.value
-      .map((item) => item.trim())
-      .filter(Boolean);
+    try {
+      await updateTask(taskId.value, {
+        spec: specDraft.value,
+        manualNote: noteDraft.value,
+      });
+      specSaved = true;
+    } catch (value: unknown) {
+      ElMessage.error(readApiError(value, '规格保存失败，请稍后重试。'));
+    }
 
-    await updateTask(taskId.value, {
-      spec: specDraft.value,
-      manualNote: noteDraft.value,
-    });
-    await replaceCriteria(taskId.value, criteria);
+    // 规格没保存成功时不再动验收标准，避免只改一半
+    if (specSaved) {
+      try {
+        await replaceCriteria(taskId.value, criteria);
+        criteriaSaved = true;
+      } catch (value: unknown) {
+        ElMessage.error(
+          readApiError(
+            value,
+            '规格已保存，验收标准保存失败，请稍后重试。',
+          ),
+        );
+      }
+    }
 
-    ElMessage.success('已保存');
-    await load({ silent: true, resetDrafts: true });
-  } catch (value: unknown) {
-    ElMessage.error(readApiError(value, '保存失败，请稍后重试。'));
+    if (specSaved && criteriaSaved) {
+      ElMessage.success('已保存');
+    }
   } finally {
     saving.value = false;
+    // 规格已落库时以服务端为准，让门禁卡片和草稿保持同步
+    if (specSaved) {
+      await load({ silent: true, resetDrafts: true });
+    }
   }
 }
 
@@ -380,7 +420,10 @@ function transitionLabel(item: AvailableTransition): string {
   return `流转到「${TASK_STATUS_LABELS[item.to]}」`;
 }
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadDecisions();
+});
 </script>
 
 <template>
@@ -398,7 +441,11 @@ onMounted(load);
       type="error"
       :closable="false"
       show-icon
-    />
+    >
+      <div class="alert-body">
+        <el-button size="small" @click="load()">重新加载</el-button>
+      </div>
+    </el-alert>
 
     <div v-if="loading" class="state">正在加载任务…</div>
 
@@ -432,32 +479,36 @@ onMounted(load);
 
             <div class="field">
               <div class="field-head">
-                <label>任务规格</label>
+                <label for="task-spec-input">任务规格</label>
                 <span :class="{ ok: specDraftLength >= SPEC_MIN_LENGTH }">
                   {{ specDraftLength }} / {{ SPEC_MIN_LENGTH }} 字
                 </span>
               </div>
               <el-input
+                id="task-spec-input"
                 v-model="specDraft"
                 type="textarea"
                 :rows="7"
                 :disabled="!canWrite"
+                aria-label="任务规格"
                 placeholder="写清楚要做什么、边界是什么、怎样算做完。进入开发前至少 20 字。"
               />
             </div>
 
             <div class="field">
               <div class="field-head">
-                <label>人工记录</label>
+                <label for="task-note-input">人工记录</label>
                 <span :class="{ ok: noteDraftLength >= MANUAL_NOTE_MIN_LENGTH }">
                   {{ noteDraftLength }} / {{ MANUAL_NOTE_MIN_LENGTH }} 字
                 </span>
               </div>
               <el-input
+                id="task-note-input"
                 v-model="noteDraft"
                 type="textarea"
                 :rows="4"
                 :disabled="!canWrite"
+                aria-label="人工记录"
                 placeholder="记录人工判断、命令行验证或决策过程。标记完成时，AI 会话或不少于 20 字的人工记录必须有一个。"
               />
               <p class="hint">
@@ -751,6 +802,47 @@ onMounted(load);
                 </el-button>
               </div>
             </el-form>
+          </el-card>
+
+          <el-card
+            v-if="decisions.length"
+            class="card decision-card"
+            shadow="never"
+          >
+            <template #header>
+              <div class="card-head">
+                <span>关联决策</span>
+                <span class="card-kicker">只读 · {{ decisions.length }} 条</span>
+              </div>
+            </template>
+
+            <div class="decision-list">
+              <article
+                v-for="item in decisions"
+                :key="item.id"
+                class="decision-item"
+              >
+                <div class="decision-head">
+                  <router-link
+                    :to="`/projects/${item.projectId}`"
+                    class="decision-title"
+                  >
+                    {{ item.title }}
+                  </router-link>
+                  <el-tag
+                    size="small"
+                    effect="plain"
+                    :type="decisionStatusTagType(item.status)"
+                  >
+                    {{ DECISION_STATUS_LABELS[item.status] }}
+                  </el-tag>
+                </div>
+                <div class="decision-meta">
+                  <span>项目：{{ item.project.name }}</span>
+                  <time>{{ formatDateTime(item.updatedAt) }}</time>
+                </div>
+              </article>
+            </div>
           </el-card>
         </section>
 
@@ -1164,7 +1256,7 @@ h1 {
   border-top: 1px dashed #edf0f5;
   font-size: 11.5px;
   line-height: 1.7;
-  color: #9aa4b5;
+  color: #5c687b;
 }
 
 .note-input {
@@ -1267,7 +1359,7 @@ h1 {
   gap: 6px 12px;
   margin-top: 8px;
   font-size: 11.5px;
-  color: #9aa4b5;
+  color: #5c687b;
 }
 
 .record-meta time {
@@ -1290,6 +1382,65 @@ h1 {
 
 .evidence-link:hover {
   text-decoration: underline;
+}
+
+.decision-list {
+  display: grid;
+  gap: 10px;
+}
+
+.decision-item {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #edf0f5;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.decision-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f3a5f;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.decision-title:hover {
+  color: #2f6fed;
+  text-decoration: underline;
+}
+
+.decision-text {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #4c586c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.decision-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #9aa4b5;
+}
+
+.decision-meta time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .record-actions {
@@ -1412,6 +1563,14 @@ h1 {
   color: #8a95a7;
 }
 
+.alert-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
 @media (max-width: 860px) {
   .task-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -1448,6 +1607,10 @@ h1 {
   }
 
   .record-meta time {
+    margin-left: 0;
+  }
+
+  .decision-meta time {
     margin-left: 0;
   }
 

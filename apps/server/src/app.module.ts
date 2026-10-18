@@ -9,6 +9,8 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TasksModule } from './tasks/tasks.module';
 import { UsersModule } from './users/users.module';
+import { DecisionsModule } from './decisions/decisions.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { UsersModule } from './users/users.module';
     HealthModule,
     ProjectsModule,
     TasksModule,
+    DecisionsModule,
+    DashboardModule,
   ],
   providers: [
     // 顺序有意义：先解析 JWT 得到 request.user，再按权限放行

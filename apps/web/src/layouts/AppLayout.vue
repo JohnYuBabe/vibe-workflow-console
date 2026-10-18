@@ -30,6 +30,13 @@ function logout(): void {
         >
           项目
         </router-link>
+        <router-link
+          v-if="auth.hasPermission('task:read')"
+          to="/board"
+          class="nav-link"
+        >
+          看板
+        </router-link>
       </nav>
 
       <div v-if="auth.user" class="account">
@@ -59,7 +66,7 @@ function logout(): void {
     <footer class="app-footer">
       <span>vibe-workflow-console</span>
       <span class="dot">·</span>
-      <span>Day 3 · 验证记录与追溯门禁</span>
+      <span>Day 4 · 决策、看板与交付仪表盘</span>
     </footer>
   </div>
 </template>
@@ -184,7 +191,7 @@ function logout(): void {
   gap: 6px;
   padding: 18px;
   font-size: 12px;
-  color: #9aa4b5;
+  color: #5c687b;
   border-top: 1px solid #e8ecf3;
 }
 
@@ -194,12 +201,30 @@ function logout(): void {
 
 @media (max-width: 720px) {
   .app-header {
-    gap: 12px;
-    padding: 0 16px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    height: auto;
+    padding: 10px 16px;
   }
 
+  .wordmark {
+    order: 1;
+  }
+
+  .account {
+    order: 2;
+  }
+
+  /* 导航改为整行横向滚动，窄屏仍能进入项目与看板 */
   .app-nav {
-    display: none;
+    order: 3;
+    flex: 0 0 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .nav-link {
+    white-space: nowrap;
   }
 
   .account-meta,

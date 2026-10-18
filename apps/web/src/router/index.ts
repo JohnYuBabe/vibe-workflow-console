@@ -43,6 +43,12 @@ const router = createRouter({
           meta: { permission: 'project:read' },
         },
         {
+          path: 'board',
+          name: 'board',
+          component: () => import('@/views/BoardView.vue'),
+          meta: { permission: 'task:read' },
+        },
+        {
           path: 'tasks/:id',
           name: 'task-detail',
           component: () => import('@/views/TaskDetailView.vue'),

@@ -1,0 +1,110 @@
+# Day 4 交付说明
+
+日期：2026-10-18
+范围：决策记录模型与接口、任务看板、交付仪表盘、种子数据扩到 10 个任务、E2E 扩展到 Day 3–4。
+
+Day 3 让「验证 → 追溯 → 完成」这条链路可以用真实数据走通，但还缺两块：**为什么这样做**的决策没有落点，任务只能逐个点进详情看，整体交付状态也没有一屏汇总。Day 4 补上决策记录、跨项目看板与仪表盘，并保持门禁口径仍然只有 `packages/shared` 一份。
+
+## 1. 交付清单
+
+| 模块 | 内容 |
+| --- | --- |
+| 数据模型 | `Decision`（`decisions`）：标题、背景、候选方案、决定、后果、状态 `proposed / accepted / superseded`，可关联任务；迁移 `20261018040742_decisions` |
+| 共享包 | 权限新增 `decision:read` / `decision:write`；`PERMISSION_LIST` 7 条，角色预置同步 |
+| API | 决策的增 / 查 / 改 / 删（5 个端点），仪表盘汇总（1 个端点） |
+| 看板 | `/board`：五列状态、项目与关键词筛选、`?status=` 单列深链、卡片跳任务详情 |
+| 仪表盘 | `/`：四个总量指标、五态分布、三类阻塞任务、验证通过率；单次快照 |
+| 项目详情 | 决策记录卡片：新建 / 编辑 / 删除、只读详情弹窗、按 `decision:write` 控制写入口 |
+| 任务详情 | 关联决策只读卡片；列表只取摘要，不加载长正文 |
+| 种子 | 10 个任务、3 条决策、5 条 AI 会话、4 条验证；可重复执行 |
+| E2E | 14 个用例，覆盖 Day 3 门禁与 Day 4 决策 / 仪表盘 / 级联 |
+| 文档 | `README.md`、本文件，`api-contract.md` 增加 Day 4 入口 |
+
+## 2. 决策记录
+
+决策是独立实体，不是任务备注的一段文本。它回答的是「当时有哪些选项、为什么选这个、代价是什么」，需要能被单独检索、被一个任务引用，也可能先于任务存在。
+
+- `status` 只有三态：`proposed`（提出）、`accepted`（已采纳）、`superseded`（已取代）。没有删除之外的归档概念，避免状态膨胀。
+- `taskId` 可选。关联时服务端校验任务属于同一项目，跨项目返回 400；空串与纯空白在 DTO 与 service 两处都归一为 `null`，不会以 `''` 进入 Prisma。
+- 删除项目级联删除决策；删除任务或用户时 `taskId` / `createdById` 置空，历史决策保留。
+- 列表只返回摘要（不含背景、候选方案、决定、后果全文），详情、创建、更新返回完整记录。列表默认 100 条，`limit` 上限 200。
+
+权限与任务一致：`decision:read` 允许读取，`decision:write` 允许创建、修改、删除。`viewer` 只有读权限，前端不渲染「新建决策」「编辑」「删除」。
+
+## 3. 看板
+
+看板没有新增后端接口，直接复用 `GET /tasks` 的全量任务列表，在客户端按状态分组。
+
+- 五列固定为 `draft / ready / in_progress / review / done`，列内按更新时间倒序，时间相同按 id 倒序。
+- 项目筛选与关键词筛选在前端组合；`?projectId=` 指向不存在的项目时回退到全部项目。
+- `?status=in_progress` 进入单列模式，只渲染该状态，并提供「查看全部」返回完整看板；非法状态按未筛选处理。
+- 横向滚动只发生在看板容器内部，页面本身在任何宽度都不出现横向滚动。
+
+## 4. 仪表盘
+
+`GET /dashboard/summary` 在**一次事务快照**内读取：
+
+| 指标 | 来源 |
+| --- | --- |
+| `totals` | 项目、任务、决策、AI 会话总数 |
+| `statusCounts` | `task.groupBy({ by: ['status'] })`，五个键始终存在 |
+| `verification` | 验证总数、通过数、失败数、通过率；总数为 0 时通过率为 `null` |
+| `blocked.spec` | `ready` 且规格或验收不达标 |
+| `blocked.verification` | `review` 且没有通过的验证 |
+| `blocked.traceability` | `review` 且没有 AI 会话、人工记录也不足 20 字 |
+
+阻塞判定直接调用 `summarizeSpecGate` / `summarizeCompletionGate`，与真实流转使用同一份实现，不在仪表盘另写口径。只有 `ready` / `review` 的任务会加载门禁字段，其余状态只参与分组计数。
+
+## 5. 关键决策
+
+1. **决策与任务分离。**
+   决策经常跨任务、跨时间，塞进任务备注会随着任务关闭而丢失。独立实体后，一个决策可以关联任务，也可以只属于项目。
+
+2. **列表摘要、详情全文。**
+   决策正文可能很长，列表页不需要。`DecisionSummary` 与 `DecisionView` 分开，服务端用不同 `select`，前端列表、任务详情卡片都用摘要，编辑与只读弹窗先按 id 拉详情。
+
+3. **看板不加接口。**
+   当前任务量在几百条以内，`GET /tasks` 一次拉全量足够；新增看板接口只会多一套分页与筛选口径。数量增长后再考虑服务端分组。
+
+4. **仪表盘复用门禁函数。**
+   如果仪表盘自己数「规格是否合格」，很容易与流转判断出现偏差。现在两处都走 `packages/shared` 的纯函数，规则改动只改一处。
+
+5. **并发语义沿用 Day 3。**
+   更新用 `updateMany({ where: { id } })` 后按 `count` 判定存在性，删除用 `deleteMany` + `count`，避免 P2025 变成 500；写入捕获 P2003 并映射为 400「项目或关联任务不存在」。
+
+6. **种子时间戳显式写入。**
+   项目、任务、验收标准、流转、验证、会话、决策都按固定偏移生成时间，保证子记录晚于父记录、且没有未来时间；连续执行两次结果一致。
+
+## 6. 验证记录
+
+| 项目 | 结果 |
+| --- | --- |
+| `pnpm --filter @vibe/shared build` | 通过 |
+| `pnpm --filter @vibe/server build` | 通过 |
+| `pnpm --filter @vibe/web build` | 通过；入口 224.91 kB / gzip 86.21 kB，看板与仪表盘各自独立 chunk |
+| `pnpm --filter @vibe/server lint` | `tsc --noEmit` 0 错误 |
+| `pnpm --filter @vibe/web lint` | `vue-tsc --noEmit` 0 错误 |
+| `pnpm --filter @vibe/server test` | 6 个套件、56 个用例通过 |
+| `pnpm --filter @vibe/server test:e2e` | 1 个套件、14 个用例通过 |
+| Day 4 API 边界检查 | 43 项断言通过：空 `taskId` 归一、跨项目 400、列表摘要无正文、`limit` 边界、viewer 403、仪表盘计数与阻塞分组、重复删除 404 |
+| 浏览器检查 390 / 760 / 1280 | 仪表盘、看板、项目详情、任务详情均无页面级横向溢出；看板 10 张卡片、决策 3 行与接口一致；0 控制台错误 |
+| 交互检查 | 单列看板、决策只读弹窗、viewer 项目与任务详情无写按钮，全部通过 |
+| 种子幂等 | 连续执行两次结果一致：10 任务 / 3 决策 / 5 AI 会话 / 4 验证；时间戳违规 0、未来时间 0 |
+
+仍待补：**CI 从未运行**。仓库尚未推送到 GitHub，`.github/workflows` 里的 job 只做过本地等价命令验证。
+
+## 7. 接口
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/projects/:projectId/decisions` | `decision:write` | 新建决策；`taskId` 必须属于该项目 |
+| GET | `/decisions?projectId=&taskId=&status=&limit=` | `decision:read` | 摘要列表，默认 100 条，上限 200 |
+| GET | `/decisions/:id` | `decision:read` | 决策详情（含全文） |
+| PATCH | `/decisions/:id` | `decision:write` | 修改决策；`taskId: ''` 解除关联 |
+| DELETE | `/decisions/:id` | `decision:write` | 删除决策，成功 204，不存在 404 |
+| GET | `/dashboard/summary` | `task:read` | 交付汇总快照 |
+
+## 8. 下一步
+
+- 推送仓库并首次运行 CI，确认 e2e job 在干净环境可用。
+- 部署到 `https://johnyu.wancafu.com/console/`，拿到可访问链接后再写进简历。

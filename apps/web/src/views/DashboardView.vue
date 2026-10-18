@@ -1,238 +1,295 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import {
+  TASK_STATUS_LABELS,
+  TASK_STATUSES,
+  type TaskStatus,
+} from '@vibe/shared';
 import { useAuthStore } from '@/stores/auth';
-import { fetchHealth } from '@/api/health';
+import {
+  fetchDashboardSummary,
+  type DashboardSummary,
+  type DashboardTaskRef,
+} from '@/api/dashboard';
+import { readApiError } from '@/utils/api-error';
+import { formatDateTime } from '@/utils/format';
 
 const auth = useAuthStore();
 const router = useRouter();
 
-type HealthState = 'checking' | 'ok' | 'down';
-const health = ref<HealthState>('checking');
-const healthDetail = ref('正在检查 /api/health');
+const summary = ref<DashboardSummary | null>(null);
+const loading = ref(true);
+const loadError = ref('');
 
-onMounted(async () => {
+async function load(): Promise<void> {
+  loading.value = true;
+  loadError.value = '';
   try {
-    const result = await fetchHealth();
-    health.value = result.status === 'ok' ? 'ok' : 'down';
-    healthDetail.value = `API ${result.status} · DB ${result.db}`;
-  } catch {
-    health.value = 'down';
-    healthDetail.value = '无法连接 API，请确认服务端已启动';
+    summary.value = await fetchDashboardSummary();
+  } catch (error: unknown) {
+    loadError.value = readApiError(error, '加载交付数据失败，请稍后重试。');
+  } finally {
+    loading.value = false;
   }
+}
+
+onMounted(load);
+
+/** 与任务状态标签的配色保持一致，五个状态在分布条里各有颜色 */
+const STATUS_COLORS: Record<TaskStatus, string> = {
+  draft: '#9aa4b5',
+  ready: '#2f6fed',
+  in_progress: '#b7791f',
+  review: '#d14343',
+  done: '#1f9d6a',
+};
+
+function countOf(status: TaskStatus): number {
+  return summary.value?.statusCounts[status] ?? 0;
+}
+
+const taskTotal = computed(() => summary.value?.totals.tasks ?? 0);
+const reviewCount = computed(() => countOf('review'));
+const decisionCount = computed(() => summary.value?.totals.decisions ?? 0);
+
+const statusSegments = computed(() =>
+  TASK_STATUSES.map((status) => {
+    const count = countOf(status);
+    return {
+      status,
+      label: TASK_STATUS_LABELS[status],
+      count,
+      color: STATUS_COLORS[status],
+      percent: taskTotal.value > 0 ? (count / taskTotal.value) * 100 : 0,
+    };
+  }).filter((segment) => segment.count > 0),
+);
+
+/** 通过率按 0.00 展示；没有验证记录时显示破折号 */
+const passRateText = computed(() => {
+  const rate = summary.value?.verification.passRate;
+  return rate == null ? '—' : rate.toFixed(2);
 });
 
-const checklist = [
-  {
-    title: '登录与 JWT',
-    detail: 'POST /api/auth/login 返回 token，受保护接口校验 Bearer',
-    done: true,
-  },
-  {
-    title: '角色与权限',
-    detail: 'v-permission 指令 + 路由 meta.permission 已生效，viewer 看不到写操作',
-    done: true,
-  },
-  {
-    title: '项目与任务',
-    detail: 'Project / Task 列表、详情、验收标准编辑与状态流转时间线',
-    done: true,
-  },
-  {
-    title: '规格门禁',
-    detail: '规格至少 20 字且至少 3 条验收标准才能进入待开发，API 422 拦截',
-    done: true,
-  },
-  {
-    title: '验证门禁',
-    detail: 'Verification 记录带通过/未通过与证据链接，review → done 需至少 1 条通过',
-    done: true,
-  },
-  {
-    title: '追溯记录',
-    detail: 'AiSession 台账与人工记录二选一，满足追溯才允许标记完成',
-    done: true,
-  },
-];
+interface BlockedGroup {
+  key: 'spec' | 'verification' | 'traceability';
+  title: string;
+  hint: string;
+  empty: string;
+  tasks: DashboardTaskRef[];
+}
 
-const nextSteps = [
-  '任务看板与跨项目筛选',
-  'CI 流水线在 GitHub 上首次跑通',
-  '演示环境部署并确认链接返回 200',
-  '简历项目条目与 5 分钟演示脚本',
-];
+const blockedGroups = computed<BlockedGroup[]>(() => {
+  const blocked = summary.value?.blocked;
+  return [
+    {
+      key: 'spec',
+      title: '规格未达标',
+      hint: '状态为待开发，但规格字数或验收条数不足',
+      empty: '没有规格未达标的任务',
+      tasks: blocked?.spec ?? [],
+    },
+    {
+      key: 'verification',
+      title: '缺通过验证',
+      hint: '状态为待审查，但还没有一条通过的验证记录',
+      empty: '没有缺通过验证的任务',
+      tasks: blocked?.verification ?? [],
+    },
+    {
+      key: 'traceability',
+      title: '缺追溯记录',
+      hint: '状态为待审查，但没有 AI 会话，人工记录也不足 20 字',
+      empty: '没有缺追溯记录的任务',
+      tasks: blocked?.traceability ?? [],
+    },
+  ];
+});
 </script>
 
 <template>
   <div class="dashboard">
     <header class="page-head">
-      <div>
-        <p class="eyebrow">Day 3 · Trace &amp; Gates</p>
+      <div class="head-main">
+        <p class="eyebrow">Day 4 · Delivery Metrics</p>
         <h1>交付控制台</h1>
         <p class="sub">
-          欢迎，{{ auth.user?.name ?? '开发者' }}。项目、任务与两道门禁已经串起来：
-          review → done 需要至少一条通过的验证记录，以及 AI 会话或人工记录。
+          欢迎，{{ auth.user?.name ?? '开发者' }}。任务、验证与决策的指标汇总在这里，
+          数字来自服务端的一次快照；点开可跳转的卡片会回到对应的看板或项目。
         </p>
       </div>
       <div class="head-side">
-        <el-button type="primary" @click="router.push('/projects')">
-          查看项目
+        <el-button type="primary" @click="router.push('/board')">
+          任务看板
         </el-button>
-        <el-tag class="day-tag" effect="dark" type="primary">Day 3</el-tag>
+        <el-tag class="day-tag" effect="dark" type="primary">Day 4</el-tag>
       </div>
     </header>
 
-    <section class="cards">
-      <el-card class="card" shadow="never">
-        <template #header>
-          <div class="card-head">
-            <span>当前身份</span>
-            <span class="card-kicker">auth/me</span>
-          </div>
-        </template>
+    <div v-if="auth.user" class="identity-strip">
+      <span class="identity-avatar" aria-hidden="true">
+        {{ auth.user.name.slice(0, 1) }}
+      </span>
+      <strong class="identity-name">{{ auth.user.name }}</strong>
+      <span class="identity-email">{{ auth.user.email }}</span>
+      <div class="identity-tags">
+        <el-tag
+          v-for="role in auth.user.roles"
+          :key="role"
+          size="small"
+          effect="plain"
+        >
+          {{ role }}
+        </el-tag>
+      </div>
+      <span class="identity-perms">
+        {{ auth.user.permissions.length }} 项权限
+      </span>
+    </div>
 
-        <div v-if="auth.user" class="identity">
-          <div class="identity-row">
-            <span class="label">姓名</span>
-            <strong>{{ auth.user.name }}</strong>
-          </div>
-          <div class="identity-row">
-            <span class="label">邮箱</span>
-            <span>{{ auth.user.email }}</span>
-          </div>
-          <div class="identity-row">
-            <span class="label">角色</span>
-            <div class="tags">
-              <el-tag
-                v-for="role in auth.user.roles"
-                :key="role"
-                size="small"
-                effect="plain"
-              >
-                {{ role }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="identity-row permissions">
-            <span class="label">权限</span>
-            <div class="tags">
-              <el-tag
-                v-for="permission in auth.user.permissions"
-                :key="permission"
-                size="small"
-                type="info"
-                effect="plain"
-              >
-                {{ permission }}
-              </el-tag>
-            </div>
-          </div>
+    <div v-if="loading" class="state">正在加载交付数据…</div>
+
+    <section v-else-if="loadError" class="error-state">
+      <el-alert
+        :title="loadError"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+      <el-button type="primary" plain @click="load">重新加载</el-button>
+    </section>
+
+    <template v-else-if="summary">
+      <section class="stat-grid">
+        <router-link to="/board" class="stat-card">
+          <span class="stat-label">任务总数</span>
+          <strong class="stat-value">{{ summary.totals.tasks }}</strong>
+          <span class="stat-meta">查看完整看板 →</span>
+        </router-link>
+
+        <router-link
+          to="/board?status=review"
+          class="stat-card"
+          :class="{ 'is-alert': reviewCount > 0 }"
+        >
+          <span class="stat-label">待审查</span>
+          <strong class="stat-value">{{ reviewCount }}</strong>
+          <span class="stat-meta">进入待审查列 →</span>
+        </router-link>
+
+        <div class="stat-card">
+          <span class="stat-label">验证通过率</span>
+          <strong class="stat-value">{{ passRateText }}</strong>
+          <span class="stat-meta">
+            {{ summary.verification.passed }} / {{ summary.verification.total }}
+            条验证通过
+          </span>
         </div>
-      </el-card>
 
-      <el-card class="card" shadow="never">
+        <router-link to="/projects" class="stat-card">
+          <span class="stat-label">决策记录</span>
+          <strong class="stat-value">{{ decisionCount }}</strong>
+          <span class="stat-meta">在项目详情里维护 →</span>
+        </router-link>
+      </section>
+
+      <el-card class="card status-card" shadow="never">
         <template #header>
           <div class="card-head">
-            <span>系统状态</span>
-            <span class="card-kicker">/api/health</span>
+            <span>状态分布</span>
+            <span class="card-kicker">共 {{ taskTotal }} 个任务</span>
           </div>
         </template>
 
-        <div class="health">
+        <div
+          v-if="taskTotal > 0"
+          class="status-bar"
+          role="img"
+          aria-label="任务状态分布"
+        >
           <span
-            class="health-dot"
-            :class="{
-              ok: health === 'ok',
-              down: health === 'down',
-              checking: health === 'checking',
+            v-for="segment in statusSegments"
+            :key="segment.status"
+            class="status-bar-segment"
+            :style="{
+              width: `${segment.percent}%`,
+              background: segment.color,
             }"
+            :title="`${segment.label} ${segment.count}`"
           />
-          <div>
-            <strong>
-              {{
-                health === 'ok'
-                  ? '运行正常'
-                  : health === 'down'
-                    ? '连接失败'
-                    : '检查中'
-              }}
-            </strong>
-            <p>{{ healthDetail }}</p>
-          </div>
+        </div>
+        <div v-else class="status-bar-empty">
+          还没有任务，创建任务后这里会显示状态分布
         </div>
 
-        <div class="stack">
-          <div class="stack-row">
-            <span>前端</span>
-            <code>Vue 3 + Vite + Element Plus</code>
-          </div>
-          <div class="stack-row">
-            <span>服务端</span>
-            <code>NestJS + Prisma</code>
-          </div>
-          <div class="stack-row">
-            <span>数据库</span>
-            <code>MySQL 8</code>
-          </div>
+        <div class="status-legend">
+          <router-link
+            v-for="status in TASK_STATUSES"
+            :key="status"
+            :to="`/board?status=${status}`"
+            class="status-item"
+            :class="{ zero: countOf(status) === 0 }"
+          >
+            <span
+              class="status-dot"
+              :style="{ background: STATUS_COLORS[status] }"
+              aria-hidden="true"
+            />
+            <span class="status-label">{{ TASK_STATUS_LABELS[status] }}</span>
+            <strong class="status-count">{{ countOf(status) }}</strong>
+          </router-link>
         </div>
       </el-card>
-    </section>
 
-    <section class="cards lower">
-      <el-card class="card" shadow="never">
-        <template #header>
-          <div class="card-head">
-            <span>当前进度</span>
-            <span class="card-kicker">{{ checklist.filter((item) => item.done).length }}/{{ checklist.length }}</span>
-          </div>
-        </template>
-
-        <ul class="checklist">
-          <li v-for="item in checklist" :key="item.title" :class="{ done: item.done }">
-            <span class="check" aria-hidden="true">{{ item.done ? '✓' : '·' }}</span>
-            <div>
-              <strong>{{ item.title }}</strong>
-              <p>{{ item.detail }}</p>
+      <section class="blocked-grid">
+        <el-card
+          v-for="group in blockedGroups"
+          :key="group.key"
+          class="card blocked-card"
+          shadow="never"
+        >
+          <template #header>
+            <div class="card-head">
+              <span>{{ group.title }}</span>
+              <el-tag
+                size="small"
+                :type="group.tasks.length > 0 ? 'warning' : 'info'"
+                effect="plain"
+              >
+                {{ group.tasks.length }}
+              </el-tag>
             </div>
-            <el-tag
-              size="small"
-              :type="item.done ? 'success' : 'info'"
-              effect="plain"
-            >
-              {{ item.done ? '已跑通' : '未实现' }}
-            </el-tag>
-          </li>
-        </ul>
-      </el-card>
+          </template>
 
-      <el-card class="card next-card" shadow="never">
-        <template #header>
-          <div class="card-head">
-            <span>接下来</span>
-            <span class="card-kicker">Day 3–4</span>
-          </div>
-        </template>
+          <p class="blocked-hint">{{ group.hint }}</p>
 
-        <ol class="next-list">
-          <li v-for="(step, index) in nextSteps" :key="step">
-            <span>{{ String(index + 1).padStart(2, '0') }}</span>
-            <p>{{ step }}</p>
-          </li>
-        </ol>
+          <ul v-if="group.tasks.length > 0" class="blocked-list">
+            <li v-for="task in group.tasks" :key="task.id">
+              <router-link :to="`/tasks/${task.id}`" class="blocked-item">
+                <span class="blocked-title">{{ task.title }}</span>
+                <span class="blocked-project">{{ task.project.name }}</span>
+              </router-link>
+            </li>
+          </ul>
 
-        <p class="next-note">
-          验证记录与 AI 会话已经接进任务详情；下一步是看板、CI 实跑与部署，
-          链接确认返回 200 之后再写进简历。
-        </p>
-      </el-card>
-    </section>
+          <p v-else class="blocked-empty">{{ group.empty }}</p>
+        </el-card>
+      </section>
+
+      <p class="generated">
+        数据生成于 {{ formatDateTime(summary.generatedAt) }}，指标由服务端单次快照计算。
+      </p>
+    </template>
+
+    <el-empty v-else description="暂无交付数据" />
   </div>
 </template>
 
 <style scoped>
 .dashboard {
   display: grid;
-  gap: 22px;
+  gap: 18px;
 }
 
 .page-head {
@@ -240,6 +297,10 @@ const nextSteps = [
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+}
+
+.head-main {
+  min-width: 0;
 }
 
 .eyebrow {
@@ -265,10 +326,6 @@ h1 {
   color: #6b7789;
 }
 
-.day-tag {
-  flex: none;
-}
-
 .head-side {
   display: flex;
   align-items: center;
@@ -277,16 +334,143 @@ h1 {
   margin-top: 4px;
 }
 
-.cards {
+.day-tag {
+  flex: none;
+}
+
+.identity-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid #e1e6ef;
+  border-radius: 12px;
+  background: #fff;
+  font-size: 12px;
+  color: #6b7789;
+}
+
+.identity-avatar {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex: none;
+  background: #1f3a5f;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.identity-name {
+  font-size: 13px;
+  color: #18202f;
+}
+
+.identity-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a95a7;
+}
+
+.identity-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.identity-perms {
+  margin-left: auto;
+  color: #9aa4b5;
+  font-variant-numeric: tabular-nums;
+}
+
+.state {
+  padding: 40px 0;
+  text-align: center;
+  font-size: 13px;
+  color: #8a95a7;
+}
+
+.error-state {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #f0c9c9;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.stat-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid #e1e6ef;
+  border-radius: 14px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.stat-card {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+a.stat-card:hover {
+  border-color: #b9c9e4;
+  box-shadow: 0 10px 28px rgba(31, 58, 95, 0.08);
+  transform: translateY(-1px);
+}
+
+a.stat-card:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #8a95a7;
+}
+
+.stat-value {
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: #18202f;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.stat-card.is-alert .stat-value {
+  color: #d14343;
+}
+
+.stat-meta {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #5c687b;
+  overflow-wrap: anywhere;
 }
 
 .card {
   border: 1px solid #e1e6ef;
   border-radius: 14px;
   background: #fff;
+  min-width: 0;
 }
 
 .card :deep(.el-card__header) {
@@ -313,209 +497,190 @@ h1 {
   font-weight: 400;
   color: #9aa4b5;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.identity {
-  display: grid;
-  gap: 11px;
-}
-
-.identity-row {
-  display: grid;
-  grid-template-columns: 52px 1fr;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 13px;
-  color: #3d4a5e;
-}
-
-.label {
-  font-size: 11.5px;
-  color: #8a95a7;
-}
-
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.permissions {
-  align-items: flex-start;
-}
-
-.health {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0 16px;
-  border-bottom: 1px dashed #edf0f5;
-}
-
-.health strong {
-  font-size: 15px;
-  color: #18202f;
-}
-
-.health p {
-  margin: 3px 0 0;
-  font-size: 12px;
-  color: #8a95a7;
-}
-
-.health-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  flex: none;
-  background: #c3cad6;
-}
-
-.health-dot.ok {
-  background: #1f9d6a;
-  box-shadow: 0 0 0 4px rgba(31, 157, 106, 0.12);
-}
-
-.health-dot.down {
-  background: #d14343;
-  box-shadow: 0 0 0 4px rgba(209, 67, 67, 0.12);
-}
-
-.health-dot.checking {
-  background: #b7791f;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.4;
-  }
-}
-
-.stack {
-  display: grid;
-  gap: 8px;
-  padding-top: 14px;
-}
-
-.stack-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12.5px;
-  color: #6b7789;
-}
-
-.stack-row code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
-  color: #3d4a5e;
-}
-
-.lower {
-  align-items: start;
-}
-
-.checklist {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 12px;
-}
-
-.checklist li {
-  display: grid;
-  grid-template-columns: 22px 1fr auto;
-  gap: 10px;
-  align-items: start;
-  padding: 9px 0;
-  border-bottom: 1px dotted #edf0f5;
-}
-
-.checklist li:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.checklist strong {
-  font-size: 13px;
-  color: #18202f;
-}
-
-.checklist p {
-  margin: 2px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #8a95a7;
-}
-
-.check {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid #d8dee8;
-  font-size: 11px;
-  color: #9aa4b5;
-}
-
-.checklist li.done .check {
-  border-color: #bfe5d3;
-  background: #eefaf4;
-  color: #1f9d6a;
-}
-
-.next-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 11px;
-  counter-reset: none;
-}
-
-.next-list li {
-  display: grid;
-  grid-template-columns: 28px 1fr;
-  gap: 10px;
-  align-items: baseline;
-}
-
-.next-list span {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  color: #9aa4b5;
   font-variant-numeric: tabular-nums;
 }
 
-.next-list p {
-  margin: 0;
-  font-size: 13px;
-  color: #3d4a5e;
+.status-bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #edf0f5;
 }
 
-.next-note {
-  margin: 18px 0 0;
-  padding-top: 14px;
-  border-top: 1px dashed #edf0f5;
+.status-bar-segment {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.status-bar-empty {
+  padding: 12px 14px;
+  border: 1px dashed #e1e6ef;
+  border-radius: 10px;
   font-size: 12px;
-  line-height: 1.7;
   color: #9aa4b5;
 }
 
-@media (max-width: 860px) {
-  .cards {
-    grid-template-columns: 1fr;
-  }
+.status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-top: 16px;
+}
 
+.status-item {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 130px;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid #edf0f5;
+  border-radius: 9px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.status-item:hover {
+  border-color: #b9c9e4;
+}
+
+.status-item:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
+}
+
+.status-item.zero {
+  opacity: 0.55;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.status-label {
+  font-size: 12px;
+  color: #3d4a5e;
+  white-space: nowrap;
+}
+
+.status-count {
+  font-size: 13px;
+  color: #18202f;
+  font-variant-numeric: tabular-nums;
+}
+
+.blocked-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.blocked-hint {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #9aa4b5;
+}
+
+.blocked-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.blocked-item {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid #edf0f5;
+  border-radius: 9px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.blocked-item:hover {
+  border-color: #b9c9e4;
+  background: #f8fafd;
+}
+
+.blocked-item:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
+}
+
+.blocked-title {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #18202f;
+  overflow-wrap: anywhere;
+}
+
+.blocked-project {
+  font-size: 11.5px;
+  color: #8a95a7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blocked-empty {
+  margin: 0;
+  padding: 14px 0 6px;
+  font-size: 12px;
+  color: #9aa4b5;
+}
+
+.generated {
+  margin: 0;
+  font-size: 11.5px;
+  color: #5c687b;
+}
+
+@media (max-width: 1000px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
   .page-head {
     flex-direction: column;
   }
 
   h1 {
     font-size: 26px;
+  }
+
+  .head-side {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .identity-perms {
+    margin-left: 0;
+  }
+
+  .stat-grid {
+    gap: 10px;
+  }
+
+  .stat-card {
+    padding: 13px 14px;
+  }
+
+  .stat-value {
+    font-size: 24px;
   }
 }
 </style>
