@@ -21,6 +21,15 @@ services:
       - "127.0.0.1:3308:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+    # 面向 2GB 小机器：默认参数会按内存比例放大 buffer pool，这里手动收紧，
+    # 允许与宿主上已有服务共存。
+    command:
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+      - --max-connections=50
+      - --table-open-cache=64
+    mem_limit: 640m
+    shm_size: 128mb
     healthcheck:
       # mysqladmin ping 在认证失败时也可能返回 0，必须执行真实查询
       test:
@@ -63,6 +72,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    mem_limit: 384m
     # 只绑回环；对外由宿主 nginx 反向代理
     ports:
       - "127.0.0.1:3010:3000"
@@ -95,6 +105,7 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8080:80"
+    mem_limit: 128m
     logging: *default-logging
 
 volumes:
