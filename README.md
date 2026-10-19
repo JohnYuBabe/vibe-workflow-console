@@ -167,13 +167,17 @@ Base URL：`/api`。除登录与健康检查外都需要 `Authorization: Bearer 
 
 ```bash
 cp .env.example .env
-docker compose up --build
+# 先把 .env 里的 CHANGE_ME_* 换成真实值，否则 server 会按生产规则拒绝启动：
+#   MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / JWT_SECRET（≥32 位）
+#   ADMIN_PASSWORD（≥16 位）/ DEMO_PASSWORD（≥12 位，若要演示数据）
+openssl rand -hex 24
+docker compose --profile web up --build
 ```
 
 - Web：http://localhost:8080
 - API：http://localhost:3010/api
 
-容器启动时自动执行 `prisma migrate deploy`；`SEED_ON_START=true`（Compose 默认）时写入 Demo 账号与 Demo 项目。正式环境请把 `SEED_ON_START` 设为 `false`，并注入自己的 `JWT_SECRET`。
+容器启动时自动执行 `prisma migrate deploy`。Compose 默认不写演示数据（`SEED_ON_START=false`、`ALLOW_DEMO_SEED=false`）；要生成 Demo 账号与 Demo 项目，把这两项都改成 `true` 后重启 server。
 
 ## 域名部署
 

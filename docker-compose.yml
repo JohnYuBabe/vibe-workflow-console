@@ -30,6 +30,10 @@ services:
       - --table-open-cache=64
     mem_limit: 640m
     shm_size: 128mb
+    security_opt:
+      - no-new-privileges:true
+    # 线程也算 pids；50 个连接 + 后台线程远低于 256
+    pids_limit: 256
     healthcheck:
       # mysqladmin ping 在认证失败时也可能返回 0，必须执行真实查询
       test:
@@ -73,6 +77,7 @@ services:
     cap_drop:
       - ALL
     mem_limit: 384m
+    pids_limit: 128
     # 只绑回环；对外由宿主 nginx 反向代理
     ports:
       - "127.0.0.1:3010:3000"

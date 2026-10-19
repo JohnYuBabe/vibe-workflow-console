@@ -26,9 +26,11 @@
 # 本地：同步代码（不含 node_modules / .git）
 # --exclude .env 不能省：本地 .env 是开发配置；而 --delete 会在本地没有 .env 时
 # 删掉服务器上的生产 .env，导致下一次容器重建缺密钥起不来。
+# 服务器禁用了 root 登录，用 ubuntu@；密钥不在默认位置时加
+#   -e "ssh -i ~/.ssh/vibe_deploy -o BatchMode=yes"
 rsync -az --delete \
   --exclude node_modules --exclude .git --exclude dist --exclude .env \
-  ./ root@106.55.226.11:/opt/vibe-workflow-console/
+  ./ ubuntu@106.55.226.11:/opt/vibe-workflow-console/
 ```
 
 ```bash
@@ -66,14 +68,16 @@ docker compose exec server ./node_modules/.bin/tsx prisma/seed.ts
 # 本地：按子路径构建（构建脚本会自检 base/api/口令泄漏）
 VITE_BASE=/console/ \
 VITE_API_BASE=/console/api \
-VITE_DEMO_EMAIL=demo@vibe.local \
+VITE_DEMO_EMAIL=demo@wancafu.com \
 VITE_DEMO_PASSWORD='<与 .env 中 DEMO_PASSWORD 一致>' \
 pnpm --filter @vibe/web build
 ```
 
 ```bash
 # 本地：发布静态文件
-rsync -az --delete apps/web/dist/ root@106.55.226.11:/var/www/console/
+# /var/www 归 root，rsync 远端需要 sudo
+rsync -az --delete --rsync-path="sudo rsync" \
+  apps/web/dist/ ubuntu@106.55.226.11:/var/www/console/
 ```
 
 ```bash

@@ -57,6 +57,11 @@ If the database is unreachable, return `503` with `{ "status": "error", "db": "d
 
 ## Seed accounts
 
+These accounts exist only when seed runs with `NODE_ENV` not `production`
+(local `pnpm db:seed` and CI). Production seed creates the accounts named by
+`ADMIN_EMAIL` / `DEMO_EMAIL` with passwords from the environment instead;
+the public demo exposes only `DEMO_EMAIL`.
+
 | Role | Email | Password | Permissions |
 | --- | --- | --- | --- |
 | admin | admin@example.com | admin123 | all |
@@ -82,5 +87,5 @@ Day 2 起由全局守卫强制：除 `@Public()` 标注的登录与健康检查�
 ```
 
 - Secret: `JWT_SECRET`
-- Expiry: `JWT_EXPIRES_IN` (default `7d`)
+- Expiry: `JWT_EXPIRES_IN` (default `12h`)
 - Day 1 deliberately has no refresh token. Add it only when a real need appears.

@@ -46,6 +46,15 @@ jobs:
       - name: Typecheck & build web
         run: pnpm --filter @vibe/web build
 
+      # 线上走 /console/ 子路径；默认根路径构建不会暴露 base/api 前缀错误
+      - name: Build web for /console subpath
+        env:
+          VITE_BASE: /console/
+          VITE_API_BASE: /console/api
+          VITE_DEMO_EMAIL: demo@vibe.test
+          VITE_DEMO_PASSWORD: smoke-demo-password-12
+        run: pnpm --filter @vibe/web build
+
       - name: Validate compose file
         env:
           MYSQL_ROOT_PASSWORD: ci-root

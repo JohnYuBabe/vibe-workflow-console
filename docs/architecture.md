@@ -126,15 +126,15 @@ stateDiagram-v2
 | 多租户 | schema 没有 tenant/org/workspace 字段，所有查询都无租户过滤，系统是单一隐含工作区 |
 | 对象级授权 | 只有 `@RequirePermission()` 资源级校验；`ownerId` 只记录不参与鉴权，任何 `project:write` 账号可改删任意项目 |
 | 分页 | `GET /projects`、`GET /tasks`、验证列表、AI 会话列表全量返回；只有 `GET /decisions` 有 `limit`，默认 100 上限 200，无 offset 或 cursor |
-| 刷新令牌 | 只有单个 `accessToken`，默认 7 天；没有 refresh token 表、刷新接口、撤销接口，退出登录只是前端删 `localStorage` |
+| 刷新令牌 | 只有单个 `accessToken`，默认 12 小时；没有 refresh token 表、刷新接口、撤销接口，退出登录只是前端删 `localStorage` |
 | 结构化日志 | 没有 Logger 配置、拦截器、异常过滤器、request id 或 OpenTelemetry；只有启动时 `console.log` 和 entrypoint 的 `echo` |
-| 限流与生产默认值 | 没有 `@nestjs/throttler`、Helmet、CSRF，CORS 为 `origin: true`；Compose 默认 `JWT_SECRET=dev-secret-change-me`、`SEED_ON_START=true`、root 密码 `root`，两个 Dockerfile 都没有 `USER` |
+| 限流与生产默认值 | 已有 `@nestjs/throttler`（全局 120/分钟、登录 10/分钟）与 Helmet；CORS 默认关闭，只有配置 `CORS_ORIGINS` 才放行；Compose 不提供任何默认密钥，生产缺 `DATABASE_URL` 或弱 `JWT_SECRET` 直接拒绝启动；server 镜像以 `node` 非 root 运行。仍没有 CSRF token，靠 Bearer token 与同源部署规避 |
 | Web 测试 | `apps/web` 的 `test` 仍是 `echo "no tests yet"`；E2E 只打 API，不驱动浏览器；server 的 `test` 带 `--passWithNoTests` |
 
-还有几项明确未建：用户管理接口、任务拖拽重排、附件上传、审计日志导出、OpenAPI/Swagger、部署流水线。CI 的 `docker` job 只构建镜像，不启动容器，也不跑健康检查。
+还有几项明确未建：用户管理接口、任务拖拽重排、附件上传、审计日志导出、OpenAPI/Swagger、自动化部署。CI 的 `docker` job 构建镜像并检查运行用户，`smoke` job 用 MySQL service 起容器，打 `/api/health`、登录、未授权 401 与限流。
 
 ## 8. 后续演进顺序
-1. **部署闭环**：外部注入强 `JWT_SECRET`、关闭默认 seed、容器改非 root、CI 起容器打 `/api/health`，再补 HTTPS。没有可访问链接之前，架构完成度无法被外部验证。
+1. **部署闭环（已完成，2026-10）**：生产显式注入强 `JWT_SECRET`、默认不 seed、容器非 root、CI 起容器体检、HTTPS 上线 `https://johnyu.wancafu.com/console/`。剩余的是把手工 rsync 换成自动化部署。
 2. **访问控制**：先收紧 CORS 与限流，再决定是补对象级授权，还是把「单工作区」写成明确产品定位。当前模型无法直接支持多人隔离。
 3. **可观测性**：加 request id 与结构化日志，把 4xx/5xx、门禁失败码、慢查询打成可检索字段。现在排障只有一条启动日志。
 4. **数据量与前端质量**：给任务、项目、验证、会话补分页或服务端筛选，同时补 web 端测试并去掉 `--passWithNoTests`。看板目前依赖全量任务做客户端筛选。
