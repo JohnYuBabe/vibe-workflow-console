@@ -19,12 +19,16 @@ import { DashboardModule } from './dashboard/dashboard.module';
       isGlobal: true,
       envFilePath: ['../../.env', '.env'],
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60_000,
-        limit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 120),
-      },
-    ]),
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60_000,
+          limit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 120),
+        },
+      ],
+      // 默认文案是 "ThrottlerException: Too Many Requests"，会原样显示在登录页
+      errorMessage: '请求过于频繁，请稍后重试',
+    }),
     PrismaModule,
     AuthModule,
     UsersModule,

@@ -24,8 +24,10 @@
 
 ```bash
 # 本地：同步代码（不含 node_modules / .git）
+# --exclude .env 不能省：本地 .env 是开发配置；而 --delete 会在本地没有 .env 时
+# 删掉服务器上的生产 .env，导致下一次容器重建缺密钥起不来。
 rsync -az --delete \
-  --exclude node_modules --exclude .git --exclude dist \
+  --exclude node_modules --exclude .git --exclude dist --exclude .env \
   ./ root@106.55.226.11:/opt/vibe-workflow-console/
 ```
 

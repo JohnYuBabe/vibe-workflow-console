@@ -32,13 +32,16 @@ async function bootstrap(): Promise<void> {
     app.enableCors({ origin: origins, credentials: true });
   }
 
-  // CSP 与 HSTS 由 nginx 统一设置；这里补齐其余安全响应头。
-  // 若两边都发 HSTS，helmet 默认的 includeSubDomains 会更严格地影响整个主域。
+  // CSP、HSTS 与这三个基础头由 nginx 统一设置；应用侧再发一份会出现重复值，
+  // 两份 Referrer-Policy 还会互相覆盖。
   app.use(
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
       strictTransportSecurity: false,
+      xContentTypeOptions: false,
+      xFrameOptions: false,
+      referrerPolicy: false,
     }),
   );
 

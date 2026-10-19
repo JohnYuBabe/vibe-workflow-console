@@ -66,6 +66,10 @@ function fillDemo(email: string, password: string): void {
 
 function readError(value: unknown): string {
   if (axios.isAxiosError(value)) {
+    if (value.response?.status === 429) {
+      return '登录尝试过于频繁，请稍后重试。';
+    }
+
     const body = value.response?.data as
       | { message?: string | string[] }
       | undefined;
@@ -174,7 +178,7 @@ async function submit(): Promise<void> {
           <el-form-item label="邮箱" prop="email">
             <el-input
               v-model="form.email"
-              placeholder="admin@example.com"
+              placeholder="邮箱地址"
               autocomplete="username"
               size="large"
             />
