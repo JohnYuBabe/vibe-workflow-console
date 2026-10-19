@@ -99,11 +99,19 @@ pnpm dev
 
 ### Demo 账号
 
+以下账号只由 `pnpm db:seed` 在**本地/CI**创建：
+
 | 角色 | 邮箱 | 密码 |
 | --- | --- | --- |
 | admin | admin@example.com | admin123 |
 | editor | editor@example.com | editor123 |
 | viewer | viewer@example.com | viewer123 |
+
+生产环境不会写入这些账号：`NODE_ENV=production` 时 seed 改为读取
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` / `DEMO_EMAIL` / `DEMO_PASSWORD`，
+且必须显式设置 `SEED_ON_START=true` 与 `ALLOW_DEMO_SEED=true` 才会执行。
+线上登录页只显示构建时注入的公开 demo 账号（`VITE_DEMO_EMAIL` / `VITE_DEMO_PASSWORD`）。
+部署步骤见 `deploy/README.md`。
 
 ### Demo 项目
 

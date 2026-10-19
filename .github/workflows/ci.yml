@@ -47,6 +47,10 @@ jobs:
         run: pnpm --filter @vibe/web build
 
       - name: Validate compose file
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_PASSWORD: ci-app
+          JWT_SECRET: ci-compose-value-not-used-anywhere-0123456789
         run: docker compose config > /dev/null
 
   e2e:
@@ -115,8 +119,13 @@ jobs:
           context: .
           file: apps/server/Dockerfile
           push: false
+          load: true
+          tags: vibe-server:ci
           cache-from: type=gha,scope=server
           cache-to: type=gha,mode=max,scope=server
+
+      - name: Server image runs as non-root
+        run: test "$(docker run --rm --entrypoint id vibe-server:ci -u)" != "0"
 
       - name: Build web image
         uses: docker/build-push-action@v6
@@ -126,3 +135,91 @@ jobs:
           push: false
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+
+  smoke:
+    name: container smoke
+    runs-on: ubuntu-latest
+    needs: docker
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: vibe_console
+          MYSQL_USER: vibe
+          MYSQL_PASSWORD: vibe
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      JWT_SECRET: Zx9Kp2Vt7Qm4Lr8Ws6Nb3Hc5Jd1Fg0Ta
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 用生产路径启动：migrate deploy → 生产 seed → 非 root 进程
+      - name: Build server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          push: false
+          load: true
+          tags: vibe-server:smoke
+          cache-from: type=gha,scope=server
+
+      - name: Start server
+        run: |
+          docker run -d --name vibe-server --network host \
+            -e NODE_ENV=production \
+            -e PORT=3010 \
+            -e DATABASE_URL=mysql://vibe:vibe@127.0.0.1:3306/vibe_console \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e SEED_ON_START=true \
+            -e ALLOW_DEMO_SEED=true \
+            -e ADMIN_EMAIL=admin@vibe.test \
+            -e ADMIN_PASSWORD=smoke-admin-password-16 \
+            -e DEMO_EMAIL=demo@vibe.test \
+            -e DEMO_PASSWORD=smoke-demo-password-12 \
+            vibe-server:smoke
+
+      - name: Wait for health
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3010/api/health > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs vibe-server
+          exit 1
+
+      - name: Health, login, unauthorized
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:3010/api/health
+          status=$(curl -s -o /tmp/login.json -w '%{http_code}' \
+            -X POST http://127.0.0.1:3010/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"demo@vibe.test","password":"smoke-demo-password-12"}')
+          test "$status" = "200"
+          grep -q accessToken /tmp/login.json
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3010/api/tasks)
+          test "$code" = "401"
+          # 本地演示口令不应存在于生产 seed 中
+          if curl -s -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:3010/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@example.com","password":"admin123"}' | grep -q '^200$'; then
+            echo "本地演示账号在生产 seed 中出现" >&2
+            exit 1
+          fi
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs vibe-server || true

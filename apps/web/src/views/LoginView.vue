@@ -3,7 +3,6 @@ import { reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import axios from 'axios';
 import type { FormInstance, FormRules } from 'element-plus';
-import { DEMO_ACCOUNTS } from '@vibe/shared';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
@@ -18,6 +17,35 @@ const form = reactive({
   email: '',
   password: '',
 });
+
+// 本地开发账号与 prisma/seed.ts 的 DEV_ACCOUNTS 保持一致；
+// 该分支在生产构建时是 dead code，会被压缩掉，不会进入线上 bundle。
+const DEV_ACCOUNTS: ReadonlyArray<{
+  role: string;
+  email: string;
+  password: string;
+}> = [
+  { role: 'admin', email: 'admin@example.com', password: 'admin123' },
+  { role: 'editor', email: 'editor@example.com', password: 'editor123' },
+  { role: 'viewer', email: 'viewer@example.com', password: 'viewer123' },
+];
+
+// 线上只暴露构建时注入的公开 demo 账号，绝不把 admin 口令打进 bundle。
+const demoAccounts: ReadonlyArray<{
+  role: string;
+  email: string;
+  password: string;
+}> = import.meta.env.DEV
+  ? DEV_ACCOUNTS
+  : import.meta.env.VITE_DEMO_EMAIL && import.meta.env.VITE_DEMO_PASSWORD
+    ? [
+        {
+          role: 'demo',
+          email: import.meta.env.VITE_DEMO_EMAIL,
+          password: import.meta.env.VITE_DEMO_PASSWORD,
+        },
+      ]
+    : [];
 
 const rules: FormRules = {
   email: [
@@ -175,11 +203,11 @@ async function submit(): Promise<void> {
           </el-button>
         </el-form>
 
-        <div class="demo-block">
+        <div v-if="demoAccounts.length > 0" class="demo-block">
           <div class="demo-title">Demo 账号</div>
           <div class="demo-grid">
             <button
-              v-for="account in DEMO_ACCOUNTS"
+              v-for="account in demoAccounts"
               :key="account.role"
               type="button"
               class="demo-item"
@@ -193,7 +221,7 @@ async function submit(): Promise<void> {
         </div>
       </el-card>
 
-      <p class="side-foot">vibe-workflow-console · 本地演示环境</p>
+      <p class="side-foot">vibe-workflow-console · 交付控制台演示</p>
     </section>
   </div>
 </template>

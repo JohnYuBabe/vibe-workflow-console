@@ -1,12 +1,19 @@
 import { PrismaClient } from '@prisma/client';
-import {
-  DEMO_ACCOUNTS,
-  PERMISSION_LIST,
-  ROLE_PRESETS,
-} from '@vibe/shared';
+import { PERMISSION_LIST, ROLE_PRESETS, type RoleName } from '@vibe/shared';
 import { hash } from 'bcryptjs';
 
 const prisma = new PrismaClient();
+
+/** 仅本地开发使用的固定账号；生产账号由环境变量提供，见 resolveAccounts。 */
+const DEV_ACCOUNTS: ReadonlyArray<{
+  role: RoleName;
+  email: string;
+  password: string;
+}> = [
+  { role: 'admin', email: 'admin@example.com', password: 'admin123' },
+  { role: 'editor', email: 'editor@example.com', password: 'editor123' },
+  { role: 'viewer', email: 'viewer@example.com', password: 'viewer123' },
+];
 
 const ROLE_LABELS: Record<string, string> = {
   admin: '管理员',
@@ -326,7 +333,66 @@ const DEMO_DECISIONS: DemoDecision[] = [
   },
 ];
 
+interface SeedAccount {
+  role: RoleName;
+  email: string;
+  password: string;
+  /** 生产环境不覆盖管理员的已有密码，避免每日重置把改过的密码重置回环境变量 */
+  updatePassword: boolean;
+}
+
+/**
+ * 本地与 CI 使用固定的 demo 账号，保证 E2E 可重复。
+ * 生产只创建两个账号：管理员（密码来自 ADMIN_PASSWORD，不公开）与
+ * 对外演示账号（密码来自 DEMO_PASSWORD，会显示在登录页）。
+ */
+function resolveAccounts(isProduction: boolean): SeedAccount[] {
+  if (!isProduction) {
+    return DEV_ACCOUNTS.map((account) => ({
+      ...account,
+      updatePassword: true,
+    }));
+  }
+
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  const demoEmail = process.env.DEMO_EMAIL ?? 'demo@vibe.local';
+  const demoPassword = process.env.DEMO_PASSWORD;
+
+  if (!adminEmail || !adminPassword || !demoPassword) {
+    throw new Error(
+      'Production seed 需要 ADMIN_EMAIL、ADMIN_PASSWORD、DEMO_PASSWORD（可选 DEMO_EMAIL）。',
+    );
+  }
+  if (adminPassword.length < 16 || demoPassword.length < 12) {
+    throw new Error(
+      'ADMIN_PASSWORD 至少 16 位，DEMO_PASSWORD 至少 12 位。',
+    );
+  }
+
+  return [
+    {
+      role: 'admin',
+      email: adminEmail,
+      password: adminPassword,
+      updatePassword: false,
+    },
+    {
+      role: 'editor',
+      email: demoEmail,
+      password: demoPassword,
+      updatePassword: true,
+    },
+  ];
+}
+
 async function main(): Promise<void> {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const accounts = resolveAccounts(isProduction);
+  const adminEmail = isProduction
+    ? (process.env.ADMIN_EMAIL as string)
+    : 'admin@example.com';
+
   const permissionIds = new Map<string, string>();
 
   for (const key of PERMISSION_LIST) {
@@ -355,14 +421,13 @@ async function main(): Promise<void> {
     });
   }
 
-  for (const account of DEMO_ACCOUNTS) {
+  for (const account of accounts) {
     const passwordHash = await hash(account.password, 10);
     const user = await prisma.user.upsert({
       where: { email: account.email },
-      update: {
-        name: ROLE_LABELS[account.role],
-        passwordHash,
-      },
+      update: account.updatePassword
+        ? { name: ROLE_LABELS[account.role], passwordHash }
+        : { name: ROLE_LABELS[account.role] },
       create: {
         email: account.email,
         name: ROLE_LABELS[account.role],
@@ -381,7 +446,7 @@ async function main(): Promise<void> {
   }
 
   const admin = await prisma.user.findUniqueOrThrow({
-    where: { email: 'admin@example.com' },
+    where: { email: adminEmail },
   });
 
   // 项目下的任务、验收标准与流转记录均为级联删除
@@ -510,12 +575,16 @@ async function main(): Promise<void> {
     }),
   });
 
-  console.log(
-    'Seed complete:',
-    DEMO_ACCOUNTS.map(
-      (account) => `${account.email} / ${account.password}`,
-    ).join(', '),
-  );
+  if (isProduction) {
+    console.log(
+      `Seed complete: 生产账号已就绪（admin: ${adminEmail}，demo: ${accounts.find((a) => a.role === 'editor')?.email}）。密码不写入日志。`,
+    );
+  } else {
+    console.log(
+      'Seed complete:',
+      accounts.map((account) => `${account.email} / ${account.password}`).join(', '),
+    );
+  }
   console.log(
     `Demo 项目「${project.name}」已重建，包含 ${project.tasks.length} 个任务、${decisions.count} 条决策记录。`,
   );

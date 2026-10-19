@@ -22,14 +22,16 @@ RUN apk add --no-cache openssl libc6-compat
 ENV NODE_ENV=production
 WORKDIR /app
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/apps/server/node_modules ./apps/server/node_modules
-COPY --from=build /app/packages/shared ./packages/shared
-COPY --from=build /app/apps/server/package.json ./apps/server/package.json
-COPY --from=build /app/apps/server/dist ./apps/server/dist
-COPY --from=build /app/apps/server/prisma ./apps/server/prisma
-COPY apps/server/docker-entrypoint.sh ./apps/server/docker-entrypoint.sh
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/apps/server/node_modules ./apps/server/node_modules
+COPY --from=build --chown=node:node /app/packages/shared ./packages/shared
+COPY --from=build --chown=node:node /app/apps/server/package.json ./apps/server/package.json
+COPY --from=build --chown=node:node /app/apps/server/dist ./apps/server/dist
+COPY --from=build --chown=node:node /app/apps/server/prisma ./apps/server/prisma
+COPY --chown=node:node apps/server/docker-entrypoint.sh ./apps/server/docker-entrypoint.sh
 RUN chmod +x ./apps/server/docker-entrypoint.sh
+
+USER node
 
 WORKDIR /app/apps/server
 EXPOSE 3000
