@@ -107,8 +107,8 @@ curl -s  https://johnyu.wancafu.com/console/api/health
 ```bash
 # 服务器：拉新镜像（代码已通过 rsync 同步）
 cd /opt/vibe-workflow-console
-docker compose up -d --build server
-docker compose logs --tail=100 server
+sudo docker compose up -d --build server
+sudo docker compose logs --tail=100 server
 
 # 本地：前端有改动时重新构建并 rsync dist
 ```
@@ -125,7 +125,7 @@ docker compose logs --tail=100 server
 演示账号允许写数据，建议每天凌晨重建一次：
 
 ```cron
-17 4 * * * cd /opt/vibe-workflow-console && docker compose exec -T server ./node_modules/.bin/tsx prisma/seed.ts >> /var/log/vibe-seed.log 2>&1
+17 4 * * * cd /opt/vibe-workflow-console && sudo docker compose exec -T server ./node_modules/.bin/tsx prisma/seed.ts >> /var/log/vibe-seed.log 2>&1
 ```
 
 ## 7. 常见问题

@@ -78,6 +78,10 @@ services:
       - ALL
     mem_limit: 384m
     pids_limit: 128
+    # 应用不落盘：迁移与业务都只写数据库；需要临时文件时走 tmpfs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     # 只绑回环；对外由宿主 nginx 反向代理
     ports:
       - "127.0.0.1:3010:3000"
