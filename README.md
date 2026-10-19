@@ -17,6 +17,8 @@
 
 ## 演示
 
+**在线地址：<https://johnyu.wancafu.com/console/>** — 演示账号 `demo@wancafu.com` / `demo-5ca5c792`（登录页也会显示）。演示数据可以随时重建，见 [deploy/README.md](deploy/README.md)。
+
 下面这段录屏约 30 秒，是本地 Demo 数据下的真实操作：规格门禁拦下一次流转（422），验证门禁再拦下一次（409），数据满足后同一套规则放行。
 
 ![演示](docs/demo.gif)

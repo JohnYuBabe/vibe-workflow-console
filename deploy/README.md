@@ -26,11 +26,11 @@
 # 本地：同步代码（不含 node_modules / .git）
 # --exclude .env 不能省：本地 .env 是开发配置；而 --delete 会在本地没有 .env 时
 # 删掉服务器上的生产 .env，导致下一次容器重建缺密钥起不来。
-# 服务器禁用了 root 登录，用 ubuntu@；密钥不在默认位置时加
-#   -e "ssh -i ~/.ssh/vibe_deploy -o BatchMode=yes"
+# 服务器禁用了 root 登录，用 <SSH_USER>@；密钥不在默认位置时加
+#   -e "ssh -i ~/.ssh/<部署密钥> -o BatchMode=yes"
 rsync -az --delete \
   --exclude node_modules --exclude .git --exclude dist --exclude .env \
-  ./ ubuntu@106.55.226.11:/opt/vibe-workflow-console/
+  ./ <SSH_USER>@<SERVER_IP>:/opt/vibe-workflow-console/
 ```
 
 ```bash
@@ -60,6 +60,8 @@ docker compose exec server ./node_modules/.bin/tsx prisma/seed.ts
 
 - 创建 `ADMIN_EMAIL` 管理员（密码不公开，至少 16 位）
 - 创建 `DEMO_EMAIL` 演示账号（密码会显示在登录页，至少 12 位）
+- 拒绝 `.env.example` 里的 `CHANGE_ME_*` 占位口令
+- 重建前清空全部项目：演示实例是单工作区，访客新建或改名的项目不会残留
 - 不会在日志里打印密码
 
 ## 2. 前端与 nginx
@@ -77,7 +79,7 @@ pnpm --filter @vibe/web build
 # 本地：发布静态文件
 # /var/www 归 root，rsync 远端需要 sudo
 rsync -az --delete --rsync-path="sudo rsync" \
-  apps/web/dist/ ubuntu@106.55.226.11:/var/www/console/
+  apps/web/dist/ <SSH_USER>@<SERVER_IP>:/var/www/console/
 ```
 
 ```bash
@@ -125,8 +127,11 @@ sudo docker compose logs --tail=100 server
 演示账号允许写数据，建议每天凌晨重建一次：
 
 ```cron
-17 4 * * * cd /opt/vibe-workflow-console && sudo docker compose exec -T server ./node_modules/.bin/tsx prisma/seed.ts >> /var/log/vibe-seed.log 2>&1
+17 4 * * * cd /opt/vibe-workflow-console && sudo docker compose exec -T server ./node_modules/.bin/tsx prisma/seed.ts >> "$HOME/vibe-seed.log" 2>&1
 ```
+
+日志写到 `$HOME` 而不是 `/var/log`：挂在普通用户 crontab 下时，重定向由用户 shell 执行，
+`/var/log` 不可写会让整条命令（包括 seed 本身）直接失败。
 
 ## 7. 常见问题
 

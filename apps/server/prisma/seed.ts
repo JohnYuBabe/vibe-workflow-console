@@ -369,6 +369,17 @@ function resolveAccounts(isProduction: boolean): SeedAccount[] {
       'ADMIN_PASSWORD 至少 16 位，DEMO_PASSWORD 至少 12 位。',
     );
   }
+  // .env.example 的 CHANGE_ME_* 占位串长度也过得了上面的门槛，
+  // 照抄模板上线等于把口令写进公开仓库。
+  const PLACEHOLDER = /change[_-]?me|placeholder|your[_-]?password/i;
+  for (const [name, value] of [
+    ['ADMIN_PASSWORD', adminPassword],
+    ['DEMO_PASSWORD', demoPassword],
+  ] as const) {
+    if (PLACEHOLDER.test(value)) {
+      throw new Error(`${name} 仍是 .env.example 里的占位值，请改用随机口令。`);
+    }
+  }
 
   return [
     {
@@ -449,8 +460,11 @@ async function main(): Promise<void> {
     where: { email: adminEmail },
   });
 
-  // 项目下的任务、验收标准与流转记录均为级联删除
-  await prisma.project.deleteMany({ where: { name: DEMO_PROJECT_NAME } });
+  // 项目下的任务、验收标准与流转记录均为级联删除。
+  // 演示实例是单工作区：访客可以用演示账号新建项目、也能改掉演示项目的名字，
+  // 只按名称删会留下改名的旧项目，逐日累积把 2GB 的机器写满。seed 本身是
+  // 重建演示数据，所以直接清空全部项目。
+  await prisma.project.deleteMany({});
 
   const HOUR = 60 * 60 * 1000;
   const DAY = 24 * HOUR;
