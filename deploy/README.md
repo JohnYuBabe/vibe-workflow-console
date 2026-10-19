@@ -35,7 +35,7 @@ cd /opt/vibe-workflow-console
 cp .env.example .env
 # 必改：MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / JWT_SECRET
 #       ADMIN_PASSWORD / DEMO_PASSWORD
-openssl rand -base64 32   # 每条口令单独生成
+openssl rand -hex 24      # 每条口令单独生成；hex 不会破坏 DATABASE_URL
 chmod 600 .env
 ```
 
