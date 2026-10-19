@@ -50,6 +50,6 @@ Web 在 http://localhost:5173，API 在 http://localhost:3010/api。
 | editor@example.com | editor123 | 6 项权限，能写项目、任务、决策，没有 `user:manage` |
 | viewer@example.com | viewer123 | 3 项只读权限，看不到写按钮与流转按钮 |
 
-录屏前再跑一次 `pnpm db:seed`，把数字恢复成上面的种子值。seed 按名称删除并重建项目 vibe-workflow-console；任务 id 会变，恢复后刷新页面，停在旧任务 URL 会显示「任务不存在」。
+录屏前再跑一次 `pnpm db:seed`，把数字恢复成上面的种子值。seed 会清空全部项目，再重建项目 vibe-workflow-console；任务 id 会变，恢复后刷新页面，停在旧任务 URL 会显示「任务不存在」。
 
 toast 只显示中文原因，不显示 422 / 409；状态码在字幕里标出。数字与文案的出处：`apps/server/prisma/seed.ts`、`packages/shared/src/task-policy.ts`、`apps/server/src/tasks/task-status.service.ts`、`apps/web/src/utils/api-error.ts`。

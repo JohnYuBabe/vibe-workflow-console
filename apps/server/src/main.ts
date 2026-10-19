@@ -3,19 +3,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-
-const WEAK_SECRET = /change-me|dev-secret|example|test-secret|secret/i;
+import { assertStrongJwtSecret } from './config/assert-strong-secret';
 
 async function bootstrap(): Promise<void> {
   const isProduction = process.env.NODE_ENV === 'production';
   const jwtSecret = process.env.JWT_SECRET ?? '';
 
   if (isProduction) {
-    if (jwtSecret.length < 32 || WEAK_SECRET.test(jwtSecret)) {
-      throw new Error(
-        '生产环境必须设置长度至少 32 位、且不含占位词的 JWT_SECRET（openssl rand -base64 48）',
-      );
-    }
+    assertStrongJwtSecret(jwtSecret);
     if (!process.env.DATABASE_URL) {
       throw new Error('生产环境必须设置 DATABASE_URL');
     }
